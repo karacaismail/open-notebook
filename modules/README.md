@@ -7,7 +7,8 @@ gate, navigation/page host and module settings screen.
 | Module | Ownership | Activation |
 |---|---|---|
 | `hybrid-search` | Multilingual passage search, rank fusion and local neural reranking for Search/Ask | Runtime UI/API gate |
-| `multi-model-research` | Eight-stage research, evidence protocol, imports, retries, UI, Chrome extension and native bridge | Runtime UI/API gate |
+| `multi-model-research` | Eight core research tasks plus four optional preliminary tasks, evidence protocol, imports, retries, run/stage controls, Chrome extension and native bridge | Runtime UI/API gate |
+| `local-files` | Incremental local file catalog, filename/content retrieval, Office readers and local OCR | Runtime UI/API gate |
 | `account-models` | Signed-in Codex/Claude/Gemini CLI adapter | External service |
 | `local-audio` | Local Whisper transcription and macOS fallback speech | External service |
 | `natural-voice` | Local neural speech, voice configuration | External service |
@@ -19,6 +20,9 @@ gate, navigation/page host and module settings screen.
 No tokens, account profiles, private reports, downloaded models or audio references
 are distributed. Code is contributed by `karacaismail`; the customization inventory
 includes work developed collaboratively with Codex and Claude.
+
+See the [feature and UX summary](../docs/7-DEVELOPMENT/module-feature-summary.md)
+for the complete branch overview and validation boundaries.
 
 ## Build a selected installation
 
