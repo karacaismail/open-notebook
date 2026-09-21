@@ -79,7 +79,8 @@ def test_threshold_is_exposed_with_its_current_value():
 @pytest.mark.parametrize('permille,score,expect_warning', [(1, .002, False), (1, .0005, True),
                                                            (500, .4, True), (500, .6, False)])
 async def test_threshold_decides_when_neural_order_is_set_aside(monkeypatch, permille, score, expect_warning):
-    hit = {**row('a'), 'start': 0, 'end': 1, 'sha256': 's', 'rrf_score': .1, 'channels': ['vector']}
+    hit = {**row('a'), 'kind': 'note', 'doc_hash': 'h', 'start': 0, 'end': 1, 'sha256': 's',
+           'rrf_score': .1, 'channels': ['vector']}
     monkeypatch.setattr(service, 'settings',
                         lambda: {**service.DEFAULTS, 'weak_relevance_permille': permille})
     engine = service.HybridSearch(query=AsyncMock(return_value=[{'doc_id': 'a', 'doc_hash': 'h'}]))

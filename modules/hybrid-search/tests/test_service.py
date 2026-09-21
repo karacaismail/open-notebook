@@ -4,7 +4,8 @@ import pytest
 from open_notebook.modules.hybrid_search import service
 from open_notebook.exceptions import DatabaseOperationError, InvalidInputError
 
-ROW={'id':'hs:1','doc_id':'note:a','parent_id':'note:a','title':'Example','content':'AB-123 answer','start':0,'end':13,'sha256':'body','rrf_score':.1,'channels':['vector']}
+# Both retrieval channels always select doc_hash; the row shape must include it.
+ROW={'id':'hs:1','doc_id':'note:a','parent_id':'note:a','title':'Example','kind':'note','doc_hash':'hash','content':'AB-123 answer','start':0,'end':13,'sha256':'body','rrf_score':.1,'channels':['vector']}
 
 @pytest.fixture
 def engine(monkeypatch):

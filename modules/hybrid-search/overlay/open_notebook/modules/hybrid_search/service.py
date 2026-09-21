@@ -22,7 +22,7 @@ from open_notebook.modules.registry import Registry
 from .ranking import folded, query_terms, passages, fuse, exact_match, group_results, diversify
 
 VERSION = 'hybrid-v1'
-DEFAULTS = {'candidate_count': 60, 'rerank_limit': 32, 'ask_results': 12, 'rerank_enabled': True,
+DEFAULTS = {'candidate_count': 120, 'rerank_limit': 32, 'ask_results': 12, 'rerank_enabled': True,
             'sync_interval': 60, 'metadata_cache_seconds': 10, 'weak_relevance_permille': 1}
 
 
@@ -248,17 +248,30 @@ class HybridSearch:
         return [d for d in docs if ((sources and d['kind'] == 'source') or (notes and d['kind'] == 'note'))
                 and (allowed is None or d['parent_id'] in allowed)]
 
-    async def lexical(self, table, terms, valid, count):
-        if not terms or not valid:
+    @staticmethod
+    def restriction(valid, kinds):
+        """A scope predicate that does not grow with the archive.
+
+        A notebook filter is bounded by that notebook, so its identifiers are
+        still safe to send. An unrestricted search must never materialise one row
+        per document: at 600k documents that parameter alone is 16 MB per query.
+        """
+        if valid is not None:
+            return ' AND doc_id IN $valid', {'valid': valid}
+        return ' AND kind IN $kinds', {'kinds': kinds}
+
+    async def lexical(self, table, terms, valid, count, kinds=('source', 'note')):
+        if not terms or valid == []:
             return {}
         # SurrealDB 2.6 does not support OR across full-text matches. Each term
         # uses an index; their bounded candidate lists are combined in Python.
-        vars = {'valid': valid, 'count': count}
+        clause, scope_vars = self.restriction(valid, list(kinds))
+        vars = {'count': count, **scope_vars}
         clauses = []; names = []
         for language in ('tr', 'en'):
             for i, term in enumerate(terms[:8]):
                 name = f'{language}{i}'; names.append(name); vars['q'+str(i)] = term
-                clauses.append(f'LET ${name}=(SELECT id,doc_id,parent_id,title,kind,doc_hash,part,content,start,end,sha256, search::score(0) AS lexical_score FROM {table} WITH INDEX hs_{language}_text WHERE search_{language} @0@ $q{i} AND doc_id IN $valid ORDER BY lexical_score DESC LIMIT $count);')
+                clauses.append(f'LET ${name}=(SELECT id,doc_id,parent_id,title,kind,doc_hash,part,content,start,end,sha256, search::score(0) AS lexical_score FROM {table} WITH INDEX hs_{language}_text WHERE search_{language} @0@ $q{i}{clause} ORDER BY lexical_score DESC LIMIT $count);')
         value = await self.query('\n'.join(clauses)+'\nRETURN {'+', '.join(f'{n}: ${n}' for n in names)+'};', vars)
         if isinstance(value, list) and value and isinstance(value[-1], dict) and 'tr0' in value[-1]:
             value = value[-1]
@@ -272,7 +285,7 @@ class HybridSearch:
             combined['bm25_'+language] = sorted(rows.values(), key=lambda r: (-r['lexical_total'], str(r['id'])))[:count]
         return combined
 
-    async def vector(self, table, query, signature, spec, valid, count, scoped):
+    async def vector(self, table, query, signature, spec, valid, count, scoped, kinds=('source', 'note')):
         key = (signature, query)
         async with self.cache_lock:
             embed = self.cache.get(key)
@@ -286,15 +299,20 @@ class HybridSearch:
         # Exact scoped cosine prevents post-filter ANN from silently starving a
         # small notebook. Global retrieval uses HNSW, widening only when needed.
         fields = 'id,doc_id,parent_id,title,kind,doc_hash,part,content,start,end,sha256'
+        clause, scope_vars = self.restriction(valid, list(kinds))
         if scoped:
-            return await self.query(f'SELECT {fields}, vector::similarity::cosine(embedding,$embed) AS similarity FROM {table} WHERE doc_id IN $valid ORDER BY similarity DESC LIMIT $count', {'embed': embed, 'valid': valid, 'count': count})
-        result = await self.query(f'SELECT {fields}, vector::distance::knn() AS distance FROM {table} WHERE embedding <|{count},200|> $embed ORDER BY distance ASC', {'embed': embed})
-        result = [r for r in result if r['doc_id'] in valid]
-        if len(result) < count:
-            # ANN candidates may contain deleted/stale documents or fewer than
-            # requested eligible hits. Exact fallback guarantees scoped recall.
-            return await self.query(f'SELECT {fields}, vector::similarity::cosine(embedding,$embed) AS similarity FROM {table} WHERE doc_id IN $valid ORDER BY similarity DESC LIMIT $count', {'embed':embed,'valid':valid,'count':count})
-        return result
+            # A notebook is bounded, so an exact cosine over it stays cheap and
+            # cannot starve the way a post-filtered approximate search does.
+            return await self.query(f'SELECT {fields}, vector::similarity::cosine(embedding,$embed) AS similarity FROM {table} WHERE true{clause} ORDER BY similarity DESC LIMIT $count', {'embed': embed, 'count': count, **scope_vars})
+        allowed = None if valid is None else set(valid)
+        for width, effort in ((count, 200), (count*4, 400)):
+            result = await self.query(f'SELECT {fields}, vector::distance::knn() AS distance FROM {table} WHERE embedding <|{width},{effort}|> $embed ORDER BY distance ASC', {'embed': embed})
+            result = [r for r in result if (allowed is None or r['doc_id'] in allowed) and r['kind'] in kinds]
+            if len(result) >= count:
+                return result[:count]
+        # Widening, never a full scan: an exact cosine over an unbounded archive
+        # reads every stored vector and cannot be afforded at this size.
+        return result[:count]
 
     async def reranker_key(self, reload=False):
         if self.rerank_key is None or reload:
@@ -329,12 +347,14 @@ class HybridSearch:
             await self.start()
             raise ConfigurationError('Hybrid index is being prepared. Check Search index status and retry shortly.')
         docs = await self.scope(await self.metadata(), notebook_ids, source, note)
-        records = await self.query('SELECT doc_id,doc_hash FROM hs_document WHERE generation=$generation', {'generation': active['table']})
-        indexed = {r['doc_id']: r['doc_hash'] for r in records}
-        valid = [d['id'] for d in docs if indexed.get(d['id']) == d['doc_hash']]
-        stale = len(docs)-len(valid)
-        if stale:
-            warnings.append('index_updating'); await self.start()
+        current = {d['id']: d['doc_hash'] for d in docs}
+        kinds = [kind for kind, wanted in (('source', source), ('note', note)) if wanted]
+        # A notebook restricts to a bounded set, so sending its identifiers is fine.
+        # Without one, the kind filter does the same job at constant parameter size.
+        valid = list(current) if notebook_ids else None
+        stale = 0
+        if valid == []:
+            warnings.append('empty_scope')
         count = max(cfg['candidate_count'], min(results*3, 150))
         try:
             signature, spec = await self.model()
@@ -344,10 +364,10 @@ class HybridSearch:
         if not vector_ok:
             warnings.append('embedding_changed'); await self.start()
         table = active['table']
-        # Select only hashes from the requested scope BEFORE limiting BM25 or cosine.
-        tasks = [self.lexical(table, query_terms(keyword), valid, count)]
-        if vector_ok and valid:
-            tasks.append(self.vector(table, keyword, signature, spec, valid, count, bool(notebook_ids) or not(source and note)))
+        # Scope is applied inside the query, before any limit, in both channels.
+        tasks = [self.lexical(table, query_terms(keyword), valid, count, kinds)]
+        if vector_ok and valid != [] and kinds:
+            tasks.append(self.vector(table, keyword, signature, spec, valid, count, bool(notebook_ids), kinds))
         before=time.perf_counter(); responses = await asyncio.gather(*tasks, return_exceptions=True)
         rankings = {}; errors = []
         for i, value in enumerate(responses):
@@ -362,10 +382,22 @@ class HybridSearch:
         timings['retrieval_ms'] = round((time.perf_counter()-before)*1000)
         candidates = fuse(rankings)
         candidates.sort(key=lambda r: (not exact_match(keyword,r), -r['rrf_score']))
-        # Hash filtering is not an authorization primitive; enforce original IDs
-        # too, so equal content in a different notebook cannot cross scope.
-        allowed = set(valid)
-        candidates = [r for r in candidates if r['doc_id'] in allowed]
+        # Scope and freshness are enforced on what retrieval actually returned, so
+        # the cost follows the candidate count rather than the size of the archive.
+        # Hash agreement is not an authorization primitive; the original document
+        # identity is checked too, so equal content elsewhere cannot cross scope.
+        kept = []
+        for row in candidates:
+            expected = current.get(row['doc_id'])
+            if expected is None:
+                continue
+            if expected != row.get('doc_hash'):
+                stale += 1
+                continue
+            kept.append(row)
+        candidates = kept
+        if stale:
+            warnings.append('index_updating'); await self.start()
         candidates = diversify(candidates)
         used = False
         if candidates and (cfg['rerank_enabled'] if rerank is None else rerank):
@@ -389,7 +421,7 @@ class HybridSearch:
         rows = group_results(candidates, results)
         timings['total_ms'] = round((time.perf_counter()-start)*1000)
         return rows, {'mode':'hybrid','warnings':warnings,'channels':list(rankings),'reranked':used,
-            'candidates':len(candidates),'indexed_documents':len(valid),'pending_documents':stale,
+            'candidates':len(candidates),'indexed_documents':len(current),'pending_documents':stale,
             'index_version':VERSION,'embedding_model':active['model'],'timings':timings}
 
 
