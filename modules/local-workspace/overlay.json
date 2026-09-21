@@ -20,10 +20,6 @@
     "sha256_before": "d1567345f9451b58ab19e68fd50920d890a3490f539c5d37bc29b4337234c6a8"
   },
   {
-    "target": "frontend/src/app/(dashboard)/settings/page.tsx",
-    "sha256_before": "53a5ca0fde9f47e31cff9ad05c2c3a6e56215d7d0789361b28b631174490856b"
-  },
-  {
     "target": "frontend/src/app/(dashboard)/settings/api-keys/page.tsx",
     "sha256_before": null
   },
@@ -169,7 +165,7 @@
   },
   {
     "target": "frontend/src/components/layout/AppSidebar.tsx",
-    "sha256_before": "13db2b68af009035ba8564809fa6eaec7e8434d085c97ecf12f88ca63d9846b5"
+    "sha256_before": "63697b258f9774671b1dcc4e22744cf54bf31830d55ae6cb2b49f19593bf9d4c"
   },
   {
     "target": "frontend/src/components/podcasts/TemplatesTab.tsx",

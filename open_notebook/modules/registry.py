@@ -17,10 +17,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from open_notebook.exceptions import ConfigurationError
+from open_notebook.modules.contracts import SettingSpec, ModelPolicySpec
+
 ID = r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
 
 
-class ModuleError(Exception):
+class ModuleError(ConfigurationError):
     def __init__(self, message: str, status: int = 409):
         super().__init__(message)
         self.status = status
@@ -57,6 +60,9 @@ class Manifest(BaseModel):
     dependencies: list[str] = []
     frontend: FrontendSpec | None = None
     service: ServiceSpec | None = None
+    settings: list[SettingSpec] = Field(default_factory=list)
+    model_policies: list[ModelPolicySpec] = Field(default_factory=list)
+    request_defaults: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 class Registry:
@@ -70,6 +76,16 @@ class Registry:
                 raise ModuleError("Module ID must match its unique directory", 503)
             self.manifests[item.id] = item
         self._validate_graph()
+        for item in self.manifests.values():
+            keys = [field.key for field in item.settings]
+            if len(keys) != len(set(keys)):
+                raise ModuleError("Duplicate setting key", 503)
+            references = [key for policy in item.model_policies for key in policy.config.values()]
+            references += [key for route in item.request_defaults.values() for key in route.values()]
+            if not set(references) <= set(keys):
+                raise ModuleError("Unknown setting in module contract", 503)
+        build_file = self.root / "build.json"
+        self.applied_settings = json.loads(build_file.read_text()).get("settings", {}) if build_file.exists() else {}
         install_file = self.root / "installed.json"
         installed = json.loads(install_file.read_text()) if install_file.exists() else []
         if not isinstance(installed, list) or any(not isinstance(x, str) or x not in self.manifests for x in installed):
@@ -104,69 +120,135 @@ class Registry:
                     raise ModuleError("Module API alias collision", 503)
                 aliases.add(alias)
 
-    def enabled(self) -> set[str]:
-        try:
-            if self.state.exists():
-                data = json.loads(self.state.read_text())
-                ids = data['enabled']
-            else:
-                ids = [x.strip() for x in os.environ.get('OPEN_NOTEBOOK_MODULES', '').split(',') if x.strip()]
-            if not isinstance(ids, list) or any(not isinstance(x, str) or x not in self.installed for x in ids):
-                raise ValueError('Unknown or uninstalled module')
-            enabled = set(ids)
-            # Build/external installations are fixed; a runtime toggle only gates
-            # this application's UI/API, never kills an OS service or removes data.
-            enabled |= {mid for mid in self.installed if self.manifests[mid].activation != 'runtime'}
-            for mid in enabled:
-                if not set(self.manifests[mid].dependencies) <= enabled:
-                    raise ValueError('Disabled dependency')
-            return enabled
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            raise ModuleError('Module configuration is invalid; restore its last valid copy.', 503) from exc
+    def snapshot(self) -> dict:
+        """Read-through repository: API and workers see the same atomic revision.
 
-    def catalog(self):
-        enabled = self.enabled()
-        return [dict(id=m.id, name=m.name, description=m.description, version=m.version,
-                     activation=m.activation, dependencies=m.dependencies,
-                     installed=m.id in self.installed, enabled=m.id in enabled,
-                     frontend=m.frontend.model_dump() if m.frontend else None)
-                for m in self.manifests.values()]
+        v1 migrations preserve the previous runtime choice and installed external
+        modules. Fresh installations enable only modules explicitly bundled.
+        """
+        try:
+            source = self.state if self.state.exists() else self.root / "defaults.json"
+            if source.exists():
+                data = json.loads(source.read_text())
+                if data.get("version") == 1:
+                    data = {"version": 2, "revision": 0, "enabled": sorted(set(data["enabled"]) | {
+                        mid for mid in self.installed if self.manifests[mid].activation != "runtime"
+                    }), "settings": {}}
+            else:
+                explicit = os.environ.get("OPEN_NOTEBOOK_MODULES")
+                ids = set(self.installed) if explicit is None else {
+                    x.strip() for x in explicit.split(",") if x.strip()
+                } | {mid for mid in self.installed if self.manifests[mid].activation != "runtime"}
+                data = {"version": 2, "revision": 0, "enabled": sorted(ids), "settings": {}}
+            if data.get("version") != 2 or type(data.get("revision")) is not int or data["revision"] < 0:
+                raise ValueError("Invalid version or revision")
+            ids = data["enabled"]
+            if not isinstance(ids, list) or any(not isinstance(x, str) or x not in self.manifests for x in ids):
+                raise ValueError("Unknown module")
+            for mid in ids:
+                if mid not in self.installed and self.manifests[mid].activation != "build":
+                    raise ValueError("Uninstalled module")
+                if not set(self.manifests[mid].dependencies) <= set(ids):
+                    raise ValueError("Disabled dependency")
+            settings = data["settings"]
+            if not isinstance(settings, dict) or set(settings) - self.manifests.keys():
+                raise ValueError("Unknown settings owner")
+            for mid, values in settings.items():
+                self.validate_settings(mid, values)
+            revisions = data.setdefault("module_revisions", {})
+            if not isinstance(revisions, dict) or any(mid not in self.manifests or type(value) is not int or value < 0 for mid, value in revisions.items()):
+                raise ValueError("Invalid module revision")
+            return data
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise ModuleError("Module configuration is invalid; restore its last valid copy.", 503) from exc
+
+    def enabled(self) -> set[str]:
+        return set(self.snapshot()["enabled"])
 
     def get(self, mid: str) -> Manifest:
         if mid not in self.manifests:
-            raise ModuleError('Unknown module', 404)
+            raise ModuleError("Unknown module", 404)
         return self.manifests[mid]
+
+    def settings(self, mid: str, snapshot: dict | None = None, effective=False) -> dict:
+        item = self.get(mid)
+        values = {field.key: field.default for field in item.settings}
+        if effective and item.activation == "build":
+            values.update(self.applied_settings.get(mid, {}))
+        else:
+            values.update((snapshot or self.snapshot())["settings"].get(mid, {}))
+        return values
+
+    def active(self, mid: str, snapshot: dict | None = None) -> bool:
+        item = self.get(mid)
+        return mid in self.installed and (item.activation == "build" or mid in (snapshot or self.snapshot())["enabled"])
+
+    def catalog(self):
+        snapshot = self.snapshot()
+        result = []
+        for item in self.manifests.values():
+            enabled = item.id in snapshot["enabled"]
+            active = self.active(item.id, snapshot)
+            settings = self.settings(item.id, snapshot)
+            pending = item.activation == "build" and (enabled != active or (enabled and settings != self.settings(item.id, snapshot, effective=True)))
+            result.append(dict(id=item.id, name=item.name, description=item.description, version=item.version,
+                activation=item.activation, dependencies=item.dependencies, installed=item.id in self.installed,
+                enabled=enabled, active=active, pending_build=pending, revision=snapshot["module_revisions"].get(item.id, 0),
+                settings=settings, settings_schema=[field.model_dump() for field in item.settings],
+                frontend=item.frontend.model_dump() if item.frontend else None))
+        return result
 
     def require_enabled(self, mid: str) -> Manifest:
         item = self.get(mid)
-        if mid not in self.enabled():
-            raise ModuleError('Module is disabled or not installed', 404)
+        if not self.active(mid):
+            raise ModuleError("Module is disabled or not installed", 404)
         return item
 
-    def set_enabled(self, mid: str, enabled: bool):
+    def validate_settings(self, mid: str, values: dict):
+        fields = {field.key: field for field in self.get(mid).settings}
+        if not isinstance(values, dict) or set(values) - fields.keys():
+            raise ModuleError("Unknown module setting", 422)
+        for key, value in values.items():
+            if not fields[key].accepts(value):
+                raise ModuleError("Invalid module setting: " + key, 422)
+
+    def update(self, mid: str, *, enabled: bool | None = None, settings: dict | None = None,
+               expected_revision: int | None = None):
+        """Caller owns an exclusive lease. Never deletes module data or credentials."""
         item = self.get(mid)
-        if item.activation != 'runtime' or mid not in self.installed:
-            raise ModuleError('This module requires an operator installation/build.')
-        values = self.enabled()
-        if enabled:
+        data = self.snapshot()
+        if expected_revision is not None and expected_revision != data["module_revisions"].get(mid, 0):
+            raise ModuleError("Module settings changed in another window. Reload before saving.")
+        if mid not in self.installed and item.activation != "build":
+            raise ModuleError("Install this module first.")
+        values = set(data["enabled"])
+        if enabled is True:
             if not set(item.dependencies) <= values:
-                raise ModuleError('Enable the required dependencies first.')
+                raise ModuleError("Enable the required dependencies first.")
             values.add(mid)
-        else:
+        elif enabled is False:
             if any(mid in self.manifests[x].dependencies for x in values - {mid}):
-                raise ModuleError('An enabled module depends on this module.')
+                raise ModuleError("An enabled module depends on this module.")
             values.discard(mid)
+        if settings is not None:
+            self.validate_settings(mid, settings)
+            data["settings"][mid] = {**data["settings"].get(mid, {}), **settings}
+        data["module_revisions"][mid] = data["module_revisions"].get(mid, 0) + 1
+        data.update(enabled=sorted(values), revision=data["revision"] + 1)
         self.state.parent.mkdir(parents=True, exist_ok=True)
-        fd, name = tempfile.mkstemp(dir=self.state.parent, prefix='.modules-')
+        fd, name = tempfile.mkstemp(dir=self.state.parent, prefix=".modules-")
         try:
-            with os.fdopen(fd, 'w') as stream:
-                json.dump({'version':1, 'enabled':sorted(values)}, stream, indent=2)
+            with os.fdopen(fd, "w") as stream:
+                json.dump(data, stream, indent=2)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(name, self.state)
         finally:
             if os.path.exists(name):
                 os.unlink(name)
+
+    def set_enabled(self, mid: str, enabled: bool):
+        self.update(mid, enabled=enabled)
 
     @asynccontextmanager
     async def lock(self, exclusive=False):

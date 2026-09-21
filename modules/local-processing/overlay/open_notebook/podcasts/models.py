@@ -6,6 +6,7 @@ from surrealdb import RecordID
 
 from open_notebook.database.repository import ensure_record_id, repo_query
 from open_notebook.domain.base import ObjectModel
+from open_notebook.modules.runtime import model_policy
 
 
 async def _resolve_model_config(
@@ -16,7 +17,7 @@ async def _resolve_model_config(
     Used by resolve_outline_config, resolve_transcript_config, resolve_tts_config,
     and per-speaker TTS overrides. Optionally passes through a max_tokens override.
     """
-    from open_notebook.ai.models import Model
+    from open_notebook.ai.models import Model, resolve_anthropic_compatible_config
 
     model = await Model.get(model_id)
     config: dict = {}
@@ -24,14 +25,19 @@ async def _resolve_model_config(
         credential = await model.get_credential_obj()
         if credential:
             config = credential.to_esperanto_config()
-            config.setdefault("timeout", 600)
     if not config:
         from open_notebook.ai.key_provider import provision_provider_keys
 
         await provision_provider_keys(model.provider)
+    module_config = model_policy(model.provider, model.name, model.type)
+    config = {**config, **module_config}
+    provider = model.provider
+    if provider == "anthropic_compatible":
+        provider, config = await resolve_anthropic_compatible_config(config)
     if max_tokens is not None:
         config = {**config, "max_tokens": max_tokens}
-    return (model.provider.replace("_", "-"), model.name, config)
+    # Normalize only models admitted by optional local integrations.
+    return (provider.replace("_", "-") if module_config else provider, model.name, config)
 
 
 class EpisodeProfile(ObjectModel):

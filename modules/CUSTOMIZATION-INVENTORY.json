@@ -345,9 +345,9 @@
     },
     {
       "source": "patches/research-frontend/src/app/(dashboard)/settings/page.tsx",
-      "module_file": "modules/local-workspace/overlay/frontend/src/app/(dashboard)/settings/page.tsx",
+      "module_file": "frontend/src/components/settings/SettingsWorkspace.tsx",
       "sha256": "d748744ab4cdc63d00fd84965e1f4a502d694558bde5836ae98be00e4fe35f33",
-      "disposition": "module source"
+      "disposition": "Retired legacy overlay; generic module host settings workspace"
     },
     {
       "source": "patches/research-frontend/src/app/(dashboard)/settings/api-keys/page.test.tsx",

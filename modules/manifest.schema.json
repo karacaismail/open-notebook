@@ -46,6 +46,39 @@
       "title": "FrontendSpec",
       "type": "object"
     },
+    "ModelPolicySpec": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "model_type": {
+          "title": "Model Type",
+          "type": "string"
+        },
+        "names": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Names",
+          "type": "array"
+        },
+        "config": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Config",
+          "type": "object"
+        }
+      },
+      "required": [
+        "provider",
+        "model_type"
+      ],
+      "title": "ModelPolicySpec",
+      "type": "object"
+    },
     "ServiceSpec": {
       "additionalProperties": false,
       "properties": {
@@ -105,6 +138,88 @@
         "key_env"
       ],
       "title": "ServiceSpec",
+      "type": "object"
+    },
+    "SettingSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Key",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "boolean",
+            "integer",
+            "choice",
+            "text"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "title": "Default"
+        },
+        "label_key": {
+          "title": "Label Key",
+          "type": "string"
+        },
+        "help_key": {
+          "title": "Help Key",
+          "type": "string"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum"
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Maximum"
+        },
+        "options": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Options",
+          "type": "array"
+        }
+      },
+      "required": [
+        "key",
+        "kind",
+        "default",
+        "label_key",
+        "help_key"
+      ],
+      "title": "SettingSpec",
       "type": "object"
     }
   },
@@ -174,6 +289,30 @@
         }
       ],
       "default": null
+    },
+    "settings": {
+      "items": {
+        "$ref": "#/$defs/SettingSpec"
+      },
+      "title": "Settings",
+      "type": "array"
+    },
+    "model_policies": {
+      "items": {
+        "$ref": "#/$defs/ModelPolicySpec"
+      },
+      "title": "Model Policies",
+      "type": "array"
+    },
+    "request_defaults": {
+      "additionalProperties": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "title": "Request Defaults",
+      "type": "object"
     }
   },
   "required": [

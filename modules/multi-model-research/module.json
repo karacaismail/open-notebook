@@ -26,5 +26,40 @@
     ],
     "pending_path": "runs",
     "proxy_alias": "research"
+  },
+  "settings": [
+    {
+      "key": "language",
+      "kind": "text",
+      "default": "Türkçe",
+      "label_key": "modules.fields.language",
+      "help_key": "modules.fields.languageHelp"
+    },
+    {
+      "key": "auto_synthesize",
+      "kind": "boolean",
+      "default": true,
+      "label_key": "modules.fields.auto",
+      "help_key": "modules.fields.autoHelp"
+    },
+    {
+      "key": "execution_mode",
+      "kind": "choice",
+      "default": "browser",
+      "label_key": "modules.fields.mode",
+      "help_key": "modules.fields.modeHelp",
+      "options": [
+        "browser",
+        "imports"
+      ]
+    }
+  ],
+  "model_policies": [],
+  "request_defaults": {
+    "POST runs": {
+      "language": "language",
+      "auto_synthesize": "auto_synthesize",
+      "execution_mode": "execution_mode"
+    }
   }
 }

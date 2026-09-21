@@ -167,3 +167,6 @@ modules/**/service/tmp/
 modules/**/service/venv/
 modules/**/service/empty-workspace/
 frontend/src/modules/
+
+# Generated non-secret module build defaults
+modules/defaults.json

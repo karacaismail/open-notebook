@@ -16,8 +16,11 @@ from open_notebook.domain.notebook import Asset, Source
 from open_notebook.domain.transformation import Transformation
 from open_notebook.graphs.transformation import graph as transform_graph
 from open_notebook.utils.runtime_capabilities import engine_runtime_missing
+from open_notebook.modules.content_adapter import ContentAudioAdapter
+from open_notebook.modules.registry import ModuleError
 
-# Preferred languages for YouTube transcript selection. content-core's own
+# Default preferred languages for YouTube transcript selection, used when
+# ContentSettings.youtube_preferred_languages is unset. content-core's own
 # default is only ["en", "es", "pt"]; we keep the broader list Open Notebook has
 # always intended so non-English videos still resolve a transcript.
 YOUTUBE_PREFERRED_LANGUAGES = [
@@ -31,6 +34,8 @@ YOUTUBE_PREFERRED_LANGUAGES = [
     "fr",
     "hi",
     "ja",
+    "zh-CN",
+    "zh-TW",
 ]
 
 
@@ -88,10 +93,10 @@ async def content_process(state: SourceState) -> dict:
     # previous behavior when settings are unset.
     try:
         settings: ContentSettings = await ContentSettings.get_instance()  # type: ignore[assignment]
-        # API and worker run in separate processes. The singleton otherwise keeps
-        # old settings forever after a user changes them in the settings screen.
         object.__setattr__(settings, "_db_loaded", False)
         await settings._load_from_db()
+        if settings.youtube_preferred_languages:
+            config_kwargs["youtube_languages"] = settings.youtube_preferred_languages
         if settings.default_content_processing_engine_url:
             config_kwargs["url_engine"] = _usable_engine(
                 settings.default_content_processing_engine_url, "url"
@@ -100,8 +105,6 @@ async def content_process(state: SourceState) -> dict:
             config_kwargs["document_engine"] = _usable_engine(
                 settings.default_content_processing_engine_doc, "document"
             )
-        if settings.youtube_preferred_languages:
-            config_kwargs["youtube_languages"] = list(dict.fromkeys(settings.youtube_preferred_languages))
         if settings.docling_ocr is not None:
             config_kwargs["docling_ocr"] = settings.docling_ocr
         if settings.docling_formulas is not None:
@@ -118,16 +121,17 @@ async def content_process(state: SourceState) -> dict:
     try:
         model_manager = ModelManager()
         defaults = await model_manager.get_defaults()
-        object.__setattr__(defaults, "_db_loaded", False)
-        await defaults._load_from_db()
         if defaults.default_speech_to_text_model:
             stt_model = await Model.get(defaults.default_speech_to_text_model)
             if stt_model:
                 config_kwargs["audio_provider"] = stt_model.provider.replace("_", "-")
                 config_kwargs["audio_model"] = stt_model.name
+                config_kwargs.update(ContentAudioAdapter().configure(stt_model.provider, stt_model.name))
                 logger.debug(
                     f"Using speech-to-text model: {stt_model.provider}/{stt_model.name}"
                 )
+    except ModuleError:
+        raise
     except Exception as e:
         logger.warning(f"Failed to retrieve speech-to-text model configuration: {e}")
         # Continue without custom audio model (content-core will use its default)

@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import { useModuleNavigation, type NavigationItem } from '@/lib/modules/navigation'
-import { Puzzle } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
@@ -74,7 +73,6 @@ const getNavigation = (t: TFunction, moduleItems: (section: string) => Navigatio
       { name: t('navigation.models'), href: '/settings/models', icon: Bot, iconClass: undefined },
       { name: t('navigation.transformations'), href: '/transformations', icon: Shuffle, iconClass: undefined },
       { name: t('navigation.settings'), href: '/settings', icon: Settings, iconClass: undefined },
-      { name: t('modules.title'), href: '/settings/modules', icon: Puzzle, iconClass: undefined },
       { name: t('navigation.advanced'), href: '/advanced', icon: Wrench, iconClass: undefined },
     ],
   },

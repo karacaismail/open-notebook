@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer'
+import { useModules } from '@/lib/modules/hooks'
 import { useTranslation } from '@/lib/hooks/use-translation'
 import { useBrowserLogin, useBrowserStatus, useResearchActions, useResearchPacket, useResearchRun, useResearchRuns } from '@/modules/multi-model-research/hooks'
 import { downloadResearchFile, ExecutionMode, ResearchRun, ResearchStage } from '@/modules/multi-model-research/api'
@@ -28,8 +29,9 @@ const provenanceKeys:Record<string,string>={browser_deep_research:'research.brow
 
 function NewResearch({onCreated}:{onCreated:(id:string)=>void}) {
   const {t}=useTranslation();const {create}=useResearchActions()
-  const [question,setQuestion]=useState('');const [scope,setScope]=useState('');const [language,setLanguage]=useState('Türkçe');const [auto,setAuto]=useState(true)
-  const [asOf,setAsOf]=useState(()=>new Date().toLocaleDateString('sv-SE'));const [mode,setMode]=useState<ExecutionMode>('browser')
+  const {data:modules}=useModules();const defaults=modules?.find(item=>item.id==='multi-model-research')?.settings
+  const [question,setQuestion]=useState('');const [scope,setScope]=useState('');const [language,setLanguage]=useState(String(defaults?.language??'Türkçe'));const [auto,setAuto]=useState(defaults?.auto_synthesize!==false)
+  const [asOf,setAsOf]=useState(()=>new Date().toLocaleDateString('sv-SE'));const [mode,setMode]=useState<ExecutionMode>(defaults?.execution_mode==='imports'?'imports':'browser')
   const request=useRef<{signature:string;key:string}|null>(null)
   return <form className="space-y-5 rounded-xl border bg-card p-6" onSubmit={async event=>{event.preventDefault();try{const body={question,scope,language,as_of:asOf,auto_synthesize:auto,execution_mode:mode};const signature=JSON.stringify(body);if(request.current?.signature!==signature)request.current={signature,key:crypto.randomUUID()};const run=await create.mutateAsync({body,key:request.current.key});onCreated(run.id)}catch { /* Mutation errors are displayed by the hook. */ }}}>
     <fieldset className="space-y-3"><legend className="mb-2 text-sm font-medium">{t('research.flow')}</legend>

@@ -6,5 +6,15 @@
   "version": "0.1.0",
   "author": "karacaismail",
   "activation": "build",
-  "dependencies": []
+  "dependencies": [],
+  "settings": [
+    {
+      "key": "prefer_turkish",
+      "kind": "boolean",
+      "default": true,
+      "label_key": "modules.fields.turkish",
+      "help_key": "modules.fields.turkishHelp"
+    }
+  ],
+  "model_policies": []
 }

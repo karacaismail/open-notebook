@@ -57,9 +57,51 @@ tool. A runtime module cannot be enabled if its UI/dependencies were not selecte
 for that build. The settings screen is `/settings/modules`; research keeps `/research`
 and existing `?run=...` bookmarks.
 
-Runtime toggles persist in the module state file and override initial environment
+Desired module states and per-module preferences persist in the module state file and override initial environment
 defaults. They never delete data or terminate external services. Pause unfinished
 research jobs and wait for active work to finish before disabling research.
+
+## Settings and lifecycle
+
+`/settings` opens **General**; **Modules settings** is the second tab.
+`/settings/modules` is a compatible direct link to that tab. Every installed
+module has preferences and a desired on/off switch. Dependencies are explicit.
+Changes have a saved revision; stale edits are rejected without overwriting data.
+
+Runtime integrations close admission for new notebook requests, preserving
+running calls and files. Research requires idle/paused work. Local maintenance
+is enforced by the new policy-aware CLI, not by killing existing launcher jobs.
+Two legacy build adapters display **Build pending** until a new build applies
+those choices; the running state is shown separately.
+
+Download **Export configuration**, then prepare a build from the desired state:
+
+```sh
+python scripts/prepare_modules.py --output /tmp/notebook-next \
+  --state /path/to/open-notebook-modules.json
+```
+
+This removes disabled build overlays, retains disabled runtime modules for later
+re-enabling, and applies build preferences. Build and deploy the staged tree using
+the existing process. `modules/defaults.json` only seeds new installations;
+persistent `data/modules.json` takes precedence and is never replaced by a build.
+
+For a quiescent backup using the current module policy:
+
+```sh
+python modules/local-deployment/backup.py \
+  --module-state /path/to/open-notebook-modules.json \
+  --output /private/backup.tar.gz /private/exported-data
+```
+
+Use a fresh export after changing settings. The CLI refuses disabled maintenance
+and never overwrites an archive. With XZ selected, use a `.tar.xz` filename.
+
+The standard for new modules is [ADR-009](../docs/7-DEVELOPMENT/decisions/ADR-009-module-contracts-and-settings.md):
+class-based domain/adapters, typed public contracts, MVVM presentation, owned
+settings, no cross-module internal imports, shared UI components and explicit
+failure/apply feedback. Native AI processes remain external infrastructure; the
+legacy research engine has not been physically merged into the API process.
 
 ## Native services
 

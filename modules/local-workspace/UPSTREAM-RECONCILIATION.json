@@ -126,5 +126,9 @@
   {
     "target": "frontend/src/components/common/ThemeToggle.tsx",
     "reason": "Retain upstream accessible theme-toggle spacing."
+  },
+  {
+    "target": "frontend/src/app/(dashboard)/settings/page.tsx",
+    "reason": "Retired overlay: the core module host now owns General / Modules settings tabs and the shared MVVM settings workspace."
   }
 ]

@@ -27,3 +27,37 @@ that model agreement proves accuracy, or that the final research packet fits eve
 model's context limit. No billable eight-stage research was started for this module
 migration. Runtime toggling gates application access; it does not uninstall native
 services, remove reports or undo compiled build customizations.
+
+## Module settings and MVVM update — 2026-09-21
+
+The settings host now has General (default) and Modules settings tabs, per-module
+preferences, optional disablement, independent edit revisions and explicit
+requested/applied build state. See ADR-009 for architecture and current adapter
+boundaries; this does not claim every legacy service runs inside one process.
+
+| Check | Result |
+|---|---|
+| Module contracts, settings, migration, auth, dependencies, real model/podcast entry points, audio denial and real plain-text extraction | 36 passed |
+| Existing model/provider/podcast regression tests | 69 passed |
+| Export-to-build selection and policy-aware backup tests | 5 passed |
+| Selected-module frontend | 194 passed |
+| Core-only frontend | 177 passed |
+| Final targeted settings/model/view tests | 16 passed |
+| TypeScript / production build, selected modules and core only | Passed |
+| ESLint, module framework UI and settings host | No errors |
+| Real Chrome DOM, isolated API fixture | Toggles, saved drafts, independent module edits, requested/applied state, mobile control bounds; no provider calls |
+| Live local UI | General default, all eight enabled, own preferences, legacy settings link, desktop/mobile; no mutations |
+| Deployment data integrity | All 16 existing completed report fingerprints retained |
+
+The broad provider regressions caught over-broad podcast normalization and a
+premature timeout default that would suppress compatible-provider environment
+resolution. The final adapter normalizes only managed local models; other
+providers retain their existing configuration. No test was weakened to hide this.
+
+API, frontend and the idle source worker were restarted so request admission is
+consistent in both API and worker processes. Research/account/audio processes,
+credentials, volumes and databases were retained. A previous-image tag and code
+backup provide rollback. Runtime preferences apply on subsequent notebook
+requests; build adapters require a new build, and maintenance tools consume a
+fresh exported policy. No live research or audio generation was started by these
+checks. Existing dependency deprecation warnings are unrelated to this change.
