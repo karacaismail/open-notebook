@@ -56,7 +56,7 @@ async def lifespan(app):
                 for p in (event.src_path,getattr(event,'dest_path',None)):
                     if p and catalog.allowed(p):dirty.add(p)
                 if len(dirty)>10000:dirty.clear();rescan.set()
-            if event.is_directory:rescan.set()
+            if event.is_directory and event.event_type in ('created','deleted','moved') and any(p and catalog.allowed(p) for p in (event.src_path,getattr(event,'dest_path',None))):rescan.set()
     watcher=Observer();watcher.schedule(Changes(),str(catalog.root),recursive=True);watcher.start()
     threads=[threading.Thread(target=fn,daemon=True) for fn in (scanner,extract_worker,vector_worker)]
     WORKERS.extend(threads)
