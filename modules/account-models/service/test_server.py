@@ -8,6 +8,31 @@ import server
 
 
 class BridgeTests(unittest.TestCase):
+    def test_calibration_fingerprint_changes_with_cli_version_model_and_instructions(self):
+        with patch.object(server,'_cli_version',return_value='test-cli-1'), patch.object(server.Path,'stat') as stat:
+            stat.return_value.st_mtime_ns=1;stat.return_value.st_size=100
+            original=server.runtime_fingerprint('claude-account')
+            self.assertEqual(len(original),64)
+            with patch.dict(server.MODELS['claude-account'],research_cli_model='different-model'):
+                self.assertNotEqual(server.runtime_fingerprint('claude-account'),original)
+            with patch.object(server,'SYSTEM','changed-system'):
+                self.assertNotEqual(server.runtime_fingerprint('claude-account'),original)
+            with patch.object(server,'_cli_version',return_value='test-cli-2'):
+                self.assertNotEqual(server.runtime_fingerprint('claude-account'),original)
+
+    def test_context_observations_are_distinct_from_aggregate_claude_usage(self):
+        from unittest.mock import Mock
+        raw={'input_tokens':30,'cache_read_input_tokens':300,'cache_creation_input_tokens':3000,'output_tokens':20,
+             'iterations':[{'type':'message','input_tokens':10,'cache_read_input_tokens':100,'cache_creation_input_tokens':1000},
+                           {'type':'message','input_tokens':20,'cache_read_input_tokens':200,'cache_creation_input_tokens':2000}]}
+        proc=Mock(returncode=0);proc.communicate.return_value=(json.dumps({'result':'complete','usage':raw}),'')
+        with patch.object(server.subprocess,'Popen',return_value=proc):
+            _,usage=server.run_cli('claude-account','input','research_synthesis')
+        self.assertEqual(usage['prompt_tokens'],3330)
+        self.assertEqual(usage['first_context_tokens'],1110)
+        self.assertEqual(usage['max_context_tokens'],2220)
+        self.assertEqual(usage['context_observations'],2)
+
     def test_markdown_research_transport_is_verbatim_and_restricted(self):
         body=self.request(local_profile='research_synthesis',local_prompt_format='research-markdown-v1')
         body['messages']=[{'role':'system','content':'System instructions'}, {'role':'user','content':'İğüş\r\n```json\n{"a":"\\n"}\n```\t'}]

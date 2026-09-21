@@ -6,6 +6,7 @@ import { ResearchRetryPanel, retryTiming } from './ResearchRetryPanel'
 import { ResearchQuestionCard } from './ResearchQuestionCard'
 import { ResearchWorkflow } from './ResearchWorkflow'
 import { ResearchAttentionSummary, ResearchStopFeedback } from './ResearchStopFeedback'
+import { ResearchPolicyPanel } from './ResearchPolicyPanel'
 import { ContextBudgetRows, PacketBudget } from './ResearchContextBudget'
 
 vi.mock('@/lib/hooks/use-translation', () => ({ useTranslation: () => ({ language: 'en-US', t: (key: string, values: Record<string, unknown> = {}) => {
@@ -158,5 +159,22 @@ describe('Brief and workflow', () => {
     fireEvent.click(button)
     expect(onSelect).toHaveBeenCalledWith('synthesis_chatgpt')
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0')
+  })
+})
+
+describe('Evidence rules',()=>{
+  it('shows a blocking reason and its evidence without triggering actions',()=>{
+    const policy={version:'research-eca-v1',event:'before_submit',rules_evaluated:14,blocked:true,block_status:'context_limit',factual_verification:false as const,findings:[{id:'ECA-011',severity:'error',action:'block_submission',message:'The full packet exceeds the counted budget.',evidence:{counted_tokens:190000}}]}
+    render(<ResearchPolicyPanel policy={policy}/> )
+    expect(screen.getByText('Submission blocked · 1')).toBeInTheDocument()
+    expect(screen.getByText('The full packet exceeds the counted budget.')).toBeVisible()
+    expect(screen.getByText(/not verification that the research claims are true/)).toBeInTheDocument()
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  })
+  it.each(['integrity_error','calibration_required'])('never shows a retry countdown for %s',status=>{
+    const stage=makeStage({status,next_retry_at:null,retry_index:0})
+    render(<><ResearchStopFeedback stage={stage}/><ResearchRetryPanel run={makeRun(stage)} stage={stage} onRetry={vi.fn()}/></>)
+    expect(screen.queryByRole('timer')).not.toBeInTheDocument()
+    expect(screen.getByText('Review needed before continuing')).toBeInTheDocument()
   })
 })

@@ -3,17 +3,61 @@ import hashlib
 import json
 import re
 
-FORMAT = 'markdown-v1'
+FORMAT = 'markdown-v2'
 
 CLAIM_FIELDS = ('id','statement','status','reason','counter_evidence','limits','sources','counter_sources')
 
 
-def ledger_claims(reports):
+def ledger_blocks(text):
+    """Walk fenced blocks, never treat another block's closing fence as an opener.
+
+    Explicit evidence-ledger blocks take precedence, matching the audit contract.
+    Identical repeated blocks are one reference target; conflicting blocks remain
+    ambiguous. All original text (including duplicates) stays in the packet.
+    """
+    blocks = []
+    opened = None
+    body = []
+    for line in text.splitlines(keepends=True):
+        if opened is not None:
+            char, length, language = opened
+            if re.fullmatch(r' {0,3}' + re.escape(char) + '{' + str(length) + r',}[ \t]*(?:\r?\n)?', line):
+                blocks.append((language, ''.join(body)))
+                opened = None
+                body = []
+            else:
+                body.append(line)
+            continue
+        match = re.fullmatch(r' {0,3}(`{3,}|~{3,})([^\r\n]*)(?:\r?\n)?', line)
+        if match:
+            fence, info = match.groups()
+            if fence[0] == '`' and '`' in info:
+                continue
+            opened = (fence[0], len(fence), info.strip())
+    explicit = [body for language, body in blocks if language == 'evidence-ledger']
+    candidates = explicit
+    if not explicit:
+        candidates = []
+        for language, body in blocks:
+            if language not in ('', 'json'):
+                continue
+            try:
+                value = json.loads(body)
+                if isinstance(value, dict) and isinstance(value.get('claims'), list) and 'blind_spots' in value:
+                    candidates.append(body)
+            except ValueError:
+                pass
+    return list(dict.fromkeys(candidates))
+
+
+def ledger_claims(reports, legacy=False):
     """References are allowed only to unambiguous, complete JSON claims in full reports."""
     found = {}
     for report in reports:
         candidates = []
-        for block in re.findall(r'^```(?:evidence-ledger|json)?[^\S\n]*\n(.*?)^```[^\S\n]*$', report['content'], re.M | re.S):
+        blocks = (re.findall(r'^```(?:evidence-ledger|json)?[^\S\n]*\n(.*?)^```[^\S\n]*$', report['content'], re.M | re.S)
+                  if legacy else ledger_blocks(report['content']))
+        for block in blocks:
             try:
                 value = json.loads(block)
                 if isinstance(value,dict) and isinstance(value.get('claims'),list) and 'blind_spots' in value:
@@ -31,9 +75,9 @@ def ledger_claims(reports):
     return found
 
 
-def compact_claims(claims, reports):
+def compact_claims(claims, reports, legacy=False):
     """A lossless index, not a new model summary; overrides preserve audited source unions."""
-    lookup = ledger_claims(reports)
+    lookup = ledger_claims(reports, legacy=legacy)
     result = []
     for claim in claims:
         item = dict(claim)
@@ -88,7 +132,7 @@ def source_references(value, urls, expand=False):
     return result
 
 
-def markdown_packet(packet):
+def markdown_packet(packet, version=FORMAT):
     # A delimiter present in imported material must never terminate its data boundary.
     original = json.dumps(packet, ensure_ascii=False, sort_keys=True)
     marker = 'REFERENCE_' + hashlib.sha256(original.encode()).hexdigest()
@@ -132,7 +176,7 @@ def markdown_packet(packet):
                      'In sources/counter_sources arrays below, integers are exact URL references to the numbered inventory above. '
                      'Source IDs are S- followed by the first 16 hexadecimal digits of SHA-256 of the exact URL.')
         registry={k: v for k, v in packet['evidence_register'].items() if k != 'sources'}
-        registry['claims']=compact_claims(registry['claims'],packet['reports'])
+        registry['claims']=compact_claims(registry['claims'],packet['reports'],legacy=version=='markdown-v1')
         metadata(source_references(registry,list(sources)))
     parts.append('END_' + marker)
     return '\n\n'.join(parts) + '\n'

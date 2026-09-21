@@ -119,7 +119,7 @@ async def test_retry_uses_saved_full_input_and_rejects_tampering(engine):
     path.write_text('tampered')
     engine.provider.fail.clear();await engine.action(run['id'],'resume');await settle(engine)
     assert len(engine.provider.calls)==2
-    assert engine.stage(await engine.get(run['id']),stage['id'])['status']=='failed'
+    assert engine.stage(await engine.get(run['id']),stage['id'])['status']=='integrity_error'
     path.write_text(original)
     await engine.action(run['id'],'resume');await settle(engine)
     retried=[p for sid,p in engine.provider.calls if sid==stage['id']]

@@ -1,4 +1,16 @@
 export const researchEn = {
+  policyTitle: 'Evidence and submission checks',
+  policyChecked: '{{count}} rules checked',
+  policyBlocked: 'Submission blocked',
+  policyReview: 'Review findings',
+  policyInfo: 'Preservation checks',
+  policyNote: 'These are structural checks, not verification that the research claims are true. Original reports remain intact.',
+  policyEvidence: 'Rule evidence',
+  integrity_error: 'Evidence integrity needs attention',
+  calibration_required: 'Token calibration needs renewal',
+  stopIntegrity: 'Restore the verified input or original evidence before retrying. No automatic retry is scheduled.',
+  stopCalibration: 'The model or account runtime changed. Renew its token calibration before retrying.',
+
   budgetTitle: "Synthesis input budget",
   budgetWarning: "Evidence packet is approaching the input limit",
   budgetPlanHelp: "Visible from the end of round 2. Forecasts include space for reports not yet written; their actual length is unknown. This warning does not pause the workflow. Select a stage to review or export its packet when ready.",
@@ -77,6 +89,18 @@ export const researchEn = {
   autoRetrySchedule: 'A stalled stage retries itself after 1, 5, 30, 90 and 250 minutes.',
 }
 export const researchTr: typeof researchEn = {
+  policyTitle: 'Kanıt ve gönderim kontrolleri',
+  policyChecked: '{{count}} kural kontrol edildi',
+  policyBlocked: 'Gönderim engellendi',
+  policyReview: 'Bulguları incele',
+  policyInfo: 'Koruma kontrolleri',
+  policyNote: 'Bunlar yapısal kontrollerdir; araştırma iddialarının doğru olduğunu kanıtlamaz. Özgün raporlar korunur.',
+  policyEvidence: 'Kuralın dayanağı',
+  integrity_error: 'Kanıt bütünlüğü incelenmeli',
+  calibration_required: 'Token kalibrasyonu yenilenmeli',
+  stopIntegrity: 'Tekrar denemeden önce doğrulanmış girdiyi veya özgün kanıtı geri yükleyin. Otomatik tekrar yapılmaz.',
+  stopCalibration: 'Model veya hesap çalıştırıcısı değişti. Tekrar denemeden önce token kalibrasyonunu yenileyin.',
+
   budgetTitle: "Sentez girdi bütçesi",
   budgetWarning: "Kanıt paketi girdi sınırına yaklaşıyor",
   budgetPlanHelp: "2. turun bitiminden itibaren görünür. Öngörü, henüz yazılmamış raporlar için pay içerir; gerçek uzunlukları bilinmiyor. Bu uyarı işi duraklatmaz. Hazır olduğunda paketi incelemek veya indirmek için aşamayı seç.",

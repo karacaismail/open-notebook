@@ -60,7 +60,7 @@ Context overflow remains `context_limit`, with zero model submissions and no aut
 retry. Original exports and manual import remain available. No silent web-transport
 fallback, model summarization, output trimming or extra model decision pass is introduced.
 
-## Measured limitation
+## Initial measurement (superseded by ADR-011)
 
 The real 4ab4eb02 final packet becomes 160738 raw packet tokens, 160863 serialized CLI
 input tokens, and 189089 counted tokens with the ChatGPT policy. All report/evidence bytes
@@ -69,3 +69,5 @@ ceiling with 5% headroom. Reducing it to approximately 143000 by dropping claim 
 would violate the evidence requirement. That historical final stage is already completed
 by manual import and is not rerun. A future oversized job still needs an explicit product
 choice (manual import, approved alternate transport or approved multi-pass processing).
+
+The later parser correction, six ChatGPT calibration samples and ECA controls are recorded in [ADR-011](ADR-011-research-eca-rules.md). The original large final packet now meets the 5% headroom target without losing report or claim data.

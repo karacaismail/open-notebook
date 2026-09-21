@@ -7,13 +7,15 @@ import uuid
 import httpx
 from browser_runtime import BrowserAttention
 from datetime import datetime, timedelta, timezone
-from workflow import ATTENTION, AUTO_RETRY, RETRY_BACKOFF, SYSTEM, ancestors, citations, digest, initial_stages, now, prompt_for, ready, refresh_status
+from workflow import ATTENTION, AUTO_RETRY, RETRY_BACKOFF, SYSTEM, ancestors, citations, digest, initial_stages, now, prompt_for, ready, refresh_status, report_packet
 from evidence_protocol import VERSION, audit_report, audit_appendix
 from packet_markdown import FORMAT
 from token_budget import MARKDOWN_TRANSPORT
+from research_rules import ResearchRules
 
 class ServiceError(Exception):
-    def __init__(self,message,status=400):super().__init__(message);self.status=status
+    def __init__(self,message,status=400,kind=None,policy=None):
+        super().__init__(message);self.status=status;self.kind=kind;self.policy=policy
 
 class AccountProvider:
     def __init__(self,key_path,timeout=3900):
@@ -27,6 +29,10 @@ class AccountProvider:
                 health=await client.get('http://127.0.0.1:8317/health',timeout=10)
                 if health.status_code!=200 or MARKDOWN_TRANSPORT not in health.json().get('prompt_formats',[]):
                     raise ServiceError('Hesap köprüsü kayıpsız Markdown taşımasını desteklemiyor. Köprüyü güncelleyin; model isteği gönderilmedi.',503)
+                expected = stage.get('input_budget', {}).get('token_margin', {}).get('calibration_fingerprint')
+                policy = ResearchRules.provider_check(expected, health.json().get('runtime_fingerprints', {}).get(model))
+                if policy['blocked']:
+                    raise ServiceError(policy['findings'][0]['message'],503,kind='calibration_required',policy=policy)
             response=await client.post('http://127.0.0.1:8317/v1/chat/completions',
                 headers={'Authorization':'Bearer '+self.key_path.read_text().strip()},
                 json={'model':model,'local_profile':'research_synthesis','stream':False,
@@ -84,6 +90,7 @@ class Engine:
         self.store=store;self.provider=provider;self.sink=sink;self.browser=browser
         self.token_counter=token_counter;self.token_limit=token_limit
         self.budget=budget
+        self.rules=ResearchRules()
         self.plan_cache={}
         self.lock=asyncio.Lock();self.tasks={};self.sync_locks={}
         self.provider_locks={p:asyncio.Lock() for p in ('ChatGPT','Claude','Gemini')}
@@ -140,8 +147,37 @@ class Engine:
         if not ready(run,stage):raise ServiceError('Önceki tur tamamlanmadan bu paketi oluşturamazsınız.',409)
         prompt=self.input_prompt(run,stage)
         budget=await asyncio.to_thread(self.measure_input,prompt,stage)
-        return {'prompt':prompt,'sha256':digest(prompt),**budget,
+        policy=await asyncio.to_thread(self.check_packet,run,stage,budget)
+        return {'prompt':prompt,'sha256':digest(prompt),**budget,'policy':policy,
                 'report_count':len(ancestors(run,stage))}
+
+    def check_packet(self,run,stage,budget,event='packet_prepared'):
+        if stage['attempts']:
+            # input_prompt has checked the saved bytes. Never re-audit a different
+            # live reconstruction as if it were that immutable sent packet.
+            policy=copy.deepcopy(next((p for p in reversed(stage.get('policy_events',[]))
+                if p['event']=='before_submit' and not p['blocked'] and p.get('input_sha256')==stage.get('input_sha256')),None))
+            if policy is None:
+                policy={'version':'research-eca-v1','rules_evaluated':0,'findings':[{
+                    'id':'ECA-017','severity':'warning','action':'preserve_and_warn',
+                    'message':'Bu kayıtlı girdi kurallar eklenmeden önce gönderilmiş. SHA-256 doğrulandı; eski gönderime geriye dönük denetim yapılmış sayılmaz.',
+                    'evidence':{'saved_input':True}}],'factual_verification':False}
+            policy.update(event=event,blocked=False,block_status=None)
+            policy['findings']=[f for f in policy['findings'] if f['id'] not in ('ECA-010','ECA-011')]
+            if stage['mode']=='account' and budget['estimated_tokens']>budget['automatic_input_limit']:
+                policy.update(blocked=True,block_status='context_limit')
+                policy['findings'].append({'id':'ECA-011','severity':'error','action':'block_submission',
+                    'message':'Kaydedilmiş tam girdi güncel bütçeyi aşıyor; değiştirilmedi ve yeniden gönderilmedi.',
+                    'evidence':{'counted_tokens':budget['estimated_tokens']}})
+            return policy
+        compact=(stage.get('packet_format') or run.get('packet_format'))==FORMAT and not stage['attempts']
+        return self.rules.evaluate(report_packet(run,stage),budget,event,account=stage['mode']=='account',compact=compact)
+
+    @staticmethod
+    def record_policy(stage,policy,prompt_hash=None):
+        record=dict(policy,checked_at=now(),input_sha256=prompt_hash)
+        stage['policy']=record
+        stage.setdefault('policy_events',[]).append(record)
 
     def measure_input(self,prompt,stage):
         if self.budget:
@@ -268,14 +304,21 @@ class Engine:
                 if stage['mode']=='account' and not run['auto_synthesize']:continue
                 try:prompt=self.input_prompt(run,stage)
                 except ServiceError as exc:
-                    stage.update(status='failed',error=str(exc));continue
+                    policy={'version':'research-eca-v1','event':'before_submit','rules_evaluated':1,
+                        'blocked':True,'block_status':'integrity_error','factual_verification':False,
+                        'findings':[{'id':'ECA-016','action':'block_submission','severity':'error',
+                        'message':str(exc),'evidence':{'input_integrity':False}}]}
+                    self.record_policy(stage,policy)
+                    stage.update(status='integrity_error',error=str(exc),next_retry_at=None);continue
                 measured=await asyncio.to_thread(self.measure_input,prompt,stage)
                 count=measured['estimated_tokens']
                 stage['estimated_input_tokens']=count
                 stage['input_budget']=measured
-                if stage['mode']=='account' and count>self.token_limit:
-                    stage.update(status='context_limit',next_retry_at=None,
-                        error=f'Tam paket için sayılan girdi {count:,} token; sınır {self.token_limit:,}. İstek gönderilmedi, metin kesilmedi. Paketi indirip sentez sonucunu içe aktarabilirsiniz.');continue
+                policy=await asyncio.to_thread(self.check_packet,run,stage,measured,'before_submit')
+                self.record_policy(stage,policy,digest(prompt))
+                if policy['blocked']:
+                    reasons=' '.join(f['message'] for f in policy['findings'] if f['action']=='block_submission')
+                    stage.update(status=policy['block_status'],next_retry_at=None,error=reasons+f' Girdi: {count:,}; sınır: {self.token_limit:,}.');continue
                 path=self.input_path(run,stage);path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
                 temporary=path.with_suffix('.tmp');temporary.touch(mode=0o600)
                 temporary.write_text(prompt);temporary.replace(path)
@@ -330,7 +373,8 @@ class Engine:
         except Exception as exc:
             async with self.lock:
                 run=await self.get(run_id);stage=self.stage(run,stage_id)
-                stage.update(status=exc.kind if isinstance(exc,BrowserAttention) else 'failed',error=str(exc) if isinstance(exc,(ServiceError,BrowserAttention)) else 'Aşama tamamlanamadı. Bağlantıyı kontrol edip devam edin.',finished_at=now())
+                stage.update(status=(exc.kind or 'failed') if isinstance(exc,(BrowserAttention,ServiceError)) else 'failed',error=str(exc) if isinstance(exc,(ServiceError,BrowserAttention)) else 'Aşama tamamlanamadı. Bağlantıyı kontrol edip devam edin.',finished_at=now())
+                if isinstance(exc,ServiceError) and exc.policy:self.record_policy(stage,exc.policy,stage.get('input_sha256'))
                 self.arm_retry(stage)
                 refresh_status(run);await self.store.save(run)
         finally:self.tasks.pop((run_id,stage_id),None)

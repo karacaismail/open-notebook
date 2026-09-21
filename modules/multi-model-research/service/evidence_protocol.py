@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 from urllib.parse import urlsplit
+from packet_markdown import ledger_blocks
 
 VERSION = 2
 STATUSES = {'supported', 'disputed', 'rejected', 'unverified'}
@@ -87,17 +88,7 @@ def audit_report(run, stage):
     result = {'version': VERSION, 'assessments': [], 'warnings': [], 'missing_claim_ids': [],
               'unreferenced_prior_source_ids': [], 'blind_spots': [],
               'verification': 'structural_only; no source fetching or semantic entailment test'}
-    blocks = re.findall(r'^```evidence-ledger[^\S\n]*\n(.*?)^```[^\S\n]*$', content, re.M | re.S)
-    # Provider HTML renderers may omit the custom fence language. Recognize only
-    # a complete ledger-shaped JSON block, never arbitrary JSON/prose fragments.
-    if not blocks:
-        for block in re.findall(r'^```(?:json)?[^\S\n]*\n(.*?)^```[^\S\n]*$', content, re.M | re.S):
-            try:
-                candidate = json.loads(block)
-                if isinstance(candidate,dict) and 'claims' in candidate and 'blind_spots' in candidate:
-                    blocks.append(block)
-            except ValueError:
-                continue
+    blocks = ledger_blocks(content)
     try:
         if len(blocks) != 1:
             raise ValueError('Tek bir evidence-ledger bloğu bulunamadı.')

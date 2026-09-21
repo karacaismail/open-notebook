@@ -16,6 +16,7 @@ import { useBrowserLogin, useBrowserStatus, useResearchActions, useResearchPacke
 import { downloadResearchFile, ExecutionMode, ResearchRun, ResearchStage } from '@/modules/multi-model-research/api'
 
 import { ResearchQuestionCard, briefPreview } from '@/modules/multi-model-research/components/ResearchQuestionCard'
+import { ResearchPolicyPanel } from '@/modules/multi-model-research/components/ResearchPolicyPanel'
 import { PacketBudget, ResearchContextBudget } from '@/modules/multi-model-research/components/ResearchContextBudget'
 import { ResearchWorkflow } from '@/modules/multi-model-research/components/ResearchWorkflow'
 import { ResearchControls } from '@/modules/multi-model-research/components/ResearchControls'
@@ -88,6 +89,7 @@ function StageDetail({run,stage}:{run:ResearchRun;stage:ResearchStage}) {
     {!unlocked?<p className="py-8 text-muted-foreground">{t('research.blocked')}</p>:<>
       <ResearchStopFeedback stage={stage}/>
       <ResearchRetryPanel run={run} stage={stage} pending={retry.isPending} onRetry={()=>retry.mutate({id:run.id,stage:stage.id})}/>
+      <ResearchPolicyPanel policy={stage.policy ?? packet.data?.policy}/>
       {stage.report?<div className="space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"><span>{t(provenanceKeys[stage.report.provenance]||'research.manual_synthesis_import')}</span><Button size="sm" variant="outline" onClick={()=>downloadResearchFile(stage.report!.content,stage.id+'.md')}><Download className="mr-2 size-4"/>{t('research.report')}</Button></div>
         <div className="max-h-[65vh] overflow-y-auto pr-2"><MarkdownRenderer components={{img:({alt})=><span>{alt}</span>,a:({href,children})=><a href={href} target="_blank" rel="noopener noreferrer">{children}</a>}}>{stage.report.content}</MarkdownRenderer></div>

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Local OpenAI-compatible text adapter for the user's official, signed-in CLIs."""
 import concurrent.futures
+from functools import lru_cache
+import hashlib
 from collections import deque
 from contextlib import contextmanager
 import hmac
@@ -128,6 +130,29 @@ def command_for(model, profile='default'):
     if spec.get('cli_model'):
         args += ['--model', spec['cli_model']]
     return args
+
+
+@lru_cache(maxsize=8)
+def _cli_version(binary, modified_ns, size):
+    try:
+        result = subprocess.run([binary, '--version'], capture_output=True, text=True, timeout=5)
+        return result.stdout.strip() if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def runtime_fingerprint(model):
+    """Bind local calibration to the CLI release, exact model/effort and instructions."""
+    try:
+        args = command_for(model, 'research_synthesis')
+        stat = Path(args[0]).stat()
+        version = _cli_version(args[0], stat.st_mtime_ns, stat.st_size)
+        if not version:
+            return None
+        return hashlib.sha256(json.dumps({'version': version, 'command': args},
+                              sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    except (OSError, KeyError):
+        return None
 
 
 def prepare_prompt(body):
@@ -261,6 +286,12 @@ def run_cli(model, prompt, profile='default'):
             if provider == 'claude':
                 usage = {'prompt_tokens': raw.get('input_tokens', 0) + raw.get('cache_read_input_tokens', 0) + raw.get('cache_creation_input_tokens', 0),
                          'completion_tokens': raw.get('output_tokens', 0)}
+                # Billing totals may span several internal messages. Expose
+                # context observations separately instead of calling the sum a window size.
+                contexts = [i.get('input_tokens',0)+i.get('cache_read_input_tokens',0)+i.get('cache_creation_input_tokens',0)
+                            for i in raw.get('iterations',[]) if i.get('type')=='message']
+                if contexts:
+                    usage.update(first_context_tokens=contexts[0],max_context_tokens=max(contexts),context_observations=len(contexts))
     except (ValueError, TypeError, KeyError):
         text = ''
     if incomplete:
@@ -352,6 +383,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/health':
             self.send_json(200, {'status': 'healthy', 'adapter': 'official-account-cli',
+                                 'runtime_fingerprints': {model: runtime_fingerprint(model) for model in MODELS if MODELS[model]['provider'] in ('codex','claude')},
                                  'prompt_formats': ['json-v1','research-markdown-v1'],
                                  'queues': {name: q.status() for name, q in QUEUES.items()}})
             return

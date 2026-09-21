@@ -7,7 +7,7 @@ import { attentionStates, roundKeys } from './research-state'
 
 const actions: Record<string, string> = {
   login_required: 'stopLogin', verification_required: 'stopVerification',
-  context_limit: 'stopContext', quota_wait: 'stopQuota',
+  integrity_error: 'stopIntegrity', calibration_required: 'stopCalibration', context_limit: 'stopContext', quota_wait: 'stopQuota',
   research_unavailable: 'stopResearch', browser_changed: 'stopInterface',
   browser_unavailable: 'stopBrowser', submission_uncertain: 'stopUncertain',
 }
