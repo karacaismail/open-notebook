@@ -23,7 +23,7 @@ from .ranking import folded, query_terms, passages, fuse, exact_match, group_res
 
 VERSION = 'hybrid-v1'
 DEFAULTS = {'candidate_count': 60, 'rerank_limit': 32, 'ask_results': 12, 'rerank_enabled': True,
-            'sync_interval': 60, 'metadata_cache_seconds': 10}
+            'sync_interval': 60, 'metadata_cache_seconds': 10, 'weak_relevance_permille': 1}
 
 
 def settings():
@@ -72,6 +72,9 @@ class HybridSearch:
         self.meta_cache = None
         self.meta_cache_at = 0.0
         self.meta_lock = asyncio.Lock()
+        # Reading the reranker key blocks the event loop on every search. Hold it
+        # and re-read only when the service rejects it, so rotation still works.
+        self.rerank_key = None
 
     async def model(self):
         defaults = await model_manager.get_defaults()
@@ -293,14 +296,22 @@ class HybridSearch:
             return await self.query(f'SELECT {fields}, vector::similarity::cosine(embedding,$embed) AS similarity FROM {table} WHERE doc_id IN $valid ORDER BY similarity DESC LIMIT $count', {'embed':embed,'valid':valid,'count':count})
         return result
 
+    async def reranker_key(self, reload=False):
+        if self.rerank_key is None or reload:
+            path = Path(os.getenv('LOCAL_RERANKER_KEY_FILE', 'data/hybrid-search/reranker.key'))
+            self.rerank_key = (await asyncio.to_thread(path.read_text)).strip()
+        return self.rerank_key
+
     async def rerank(self, query, rows, count):
-        key_path = Path(os.getenv('LOCAL_RERANKER_KEY_FILE', 'data/hybrid-search/reranker.key'))
         base = os.getenv('LOCAL_RERANKER_URL', 'http://host.lima.internal:8321')
-        key = key_path.read_text().strip()
         # Identical content gets one score, but every original attribution remains.
         unique = list(dict.fromkeys(r['title']+'\n'+r['content'] for r in rows[:count]))
         async with httpx.AsyncClient(timeout=20, follow_redirects=False, trust_env=False) as client:
-            response = await client.post(base+'/rerank', headers={'Authorization': 'Bearer '+key}, json={'query': query, 'documents': unique})
+            async def call(key):
+                return await client.post(base+'/rerank', headers={'Authorization': 'Bearer '+key}, json={'query': query, 'documents': unique})
+            response = await call(await self.reranker_key())
+            if response.status_code == 401:
+                response = await call(await self.reranker_key(reload=True))
             response.raise_for_status(); values = response.json()['scores']
         if len(values) != len(unique) or any(not math.isfinite(float(v)) for v in values):
             raise ValueError('Invalid reranker scores')
@@ -364,7 +375,8 @@ class HybridSearch:
                 candidates = await self.rerank(keyword, candidates, cfg['rerank_limit']); used=True
                 # Abstain from neural ordering when every scored match is weak.
                 # Preserve the alternatives; this threshold is not truth confidence.
-                if max((r.get('rerank_score', 0) for r in candidates[:cfg['rerank_limit']]), default=0) < .001:
+                threshold = cfg.get('weak_relevance_permille', DEFAULTS['weak_relevance_permille'])/1000
+                if max((r.get('rerank_score', 0) for r in candidates[:cfg['rerank_limit']]), default=0) < threshold:
                     warnings.append('weak_relevance')
                     candidates = fused_candidates
                     used = False
