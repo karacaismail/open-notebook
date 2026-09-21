@@ -22,7 +22,8 @@ from open_notebook.modules.registry import Registry
 from .ranking import folded, query_terms, passages, fuse, exact_match, group_results, diversify
 
 VERSION = 'hybrid-v1'
-DEFAULTS = {'candidate_count': 60, 'rerank_limit': 32, 'ask_results': 12, 'rerank_enabled': True, 'sync_interval': 60}
+DEFAULTS = {'candidate_count': 60, 'rerank_limit': 32, 'ask_results': 12, 'rerank_enabled': True,
+            'sync_interval': 60, 'metadata_cache_seconds': 10}
 
 
 def settings():
@@ -64,6 +65,13 @@ class HybridSearch:
         self.cache = OrderedDict()
         self.cache_lock = asyncio.Lock()
         self.ready_tables = set()
+        # metadata() hashes the full text of every source, note and insight server
+        # side. That cost is proportional to the whole corpus and it used to run on
+        # every single query. Searches tolerate a few seconds of staleness: an
+        # out-of-date hash only marks a document pending and triggers a resync.
+        self.meta_cache = None
+        self.meta_cache_at = 0.0
+        self.meta_lock = asyncio.Lock()
 
     async def model(self):
         defaults = await model_manager.get_defaults()
@@ -74,7 +82,21 @@ class HybridSearch:
         signature = digest(json.dumps([VERSION, str(spec.id), spec.name, spec.provider, str(spec.credential)], ensure_ascii=False))
         return signature, spec
 
-    async def metadata(self):
+    async def metadata(self, fresh=False, max_age=None):
+        """Document identity and content hashes.
+
+        `fresh=True` bypasses the cache and must be used wherever correctness
+        depends on the newest state, such as deciding to publish a generation.
+        """
+        if not fresh:
+            if max_age is None:
+                try:
+                    max_age = settings()['metadata_cache_seconds']
+                except Exception:
+                    max_age = DEFAULTS['metadata_cache_seconds']
+            async with self.meta_lock:
+                if self.meta_cache is not None and (time.monotonic()-self.meta_cache_at) < max_age:
+                    return self.meta_cache
         docs = []
         for table, body, title, parent, kind in (
             ('source', 'full_text', "title OR ''", 'id', 'source'),
@@ -83,6 +105,9 @@ class HybridSearch:
         ):
             rows = await self.query(f"SELECT id, {title} AS title, {parent} AS parent_id, '{kind}' AS kind, crypto::sha256(({title}) + '\\n' + ({body} OR '')) AS doc_hash, string::len({body} OR '') AS chars FROM {table}")
             docs.extend({**r, 'body_field': body} for r in rows if r.get('chars') and r.get('parent_id'))
+        async with self.meta_lock:
+            self.meta_cache = docs
+            self.meta_cache_at = time.monotonic()
         return docs
 
     async def prepare(self, table, dimension):
@@ -134,7 +159,7 @@ class HybridSearch:
                 settings()
                 signature, spec = await self.model()
                 table = 'hs_p_' + signature[:16]
-                docs = await self.metadata()
+                docs = await self.metadata(fresh=True)
                 self.state.update(status='indexing', processed=0, total=len(docs), error=None)
                 records = await self.query('SELECT * FROM hs_document WHERE generation=$generation', {'generation': table})
                 current = {r['doc_id']: r for r in records}
@@ -182,7 +207,7 @@ class HybridSearch:
                             'record': ensure_record_id('hs_document:'+digest(table+doc['id'])),
                             'meta': {'doc_id': doc['id'], 'doc_hash': doc['doc_hash'], 'generation': table, 'parts': len(parts)}})
                     self.state['processed'] += 1
-                latest = await self.metadata()
+                latest = await self.metadata(fresh=True)
                 indexed_rows = await self.query('SELECT doc_id,doc_hash FROM hs_document WHERE generation=$generation', {'generation':table})
                 indexed_hashes = {r['doc_id']:r['doc_hash'] for r in indexed_rows}
                 if any(indexed_hashes.get(d['id']) != d['doc_hash'] for d in latest):
