@@ -36,6 +36,10 @@ class Catalog:
         # Hidden directories hold tool state, not documents, and their names are
         # open-ended, so they are matched by their leading dot rather than listed.
         self.skip_hidden=bool(config.get('exclude_hidden_directories',False))
+        # Glob patterns for directory names that are generated rather than written,
+        # and for files that are lockfiles or build output rather than documents.
+        self.exclude_patterns=list(config.get('exclude_name_patterns',[]))
+        self.exclude_files=list(config.get('exclude_file_patterns',[]))
         self.active=lambda:True
         self.max_bytes=config.get('max_content_bytes',20*1024*1024)
         self.config=config;self.lock=threading.RLock();self.scan_lock=threading.Lock();self.progress={'phase':'starting','visited':0,'unreadable_directories':0,'last_scan':None,'error':None}
@@ -69,6 +73,15 @@ class Catalog:
             lexical=Path(os.path.abspath(path));real=lexical.resolve(strict=False)
             if self.exclude_names and (self.exclude_names.intersection(lexical.parts) or self.exclude_names.intersection(real.parts)):
                 return False
+            if self.exclude_patterns:
+                import fnmatch
+                for part in lexical.parts[len(self.root.parts):]:
+                    if any(fnmatch.fnmatch(part,pat) for pat in self.exclude_patterns):
+                        return False
+            if self.exclude_files and lexical.is_file():
+                import fnmatch
+                if any(fnmatch.fnmatch(lexical.name,pat) for pat in self.exclude_files):
+                    return False
             if self.skip_hidden:
                 root_parts=len(self.root.parts)
                 if any(part.startswith('.') for part in lexical.parts[root_parts:-1] if part not in ('.','..')):
@@ -235,7 +248,7 @@ class Catalog:
             counts={r[0]:r[1] for r in db.execute('SELECT status,count(*) FROM files GROUP BY status')}
             vectors=db.execute('SELECT count(*) FROM chunks WHERE vector IS NOT NULL').fetchone()[0]
             passages=db.execute('SELECT count(*) FROM chunks').fetchone()[0]
-        return dict(self.progress,root=str(self.root),excluded=[str(p) for p in self.excludes],excluded_names=sorted(self.exclude_names),hidden_directories='excluded' if self.skip_hidden else 'included',files=sum(counts.values()),counts=counts,passages=passages,vectors=vectors,semantic_error=self.vector_error,embedding_model=self.config['embedding_model'],directory_symlinks='canonical_targets_only',max_content_bytes=self.max_bytes)
+        return dict(self.progress,root=str(self.root),excluded=[str(p) for p in self.excludes],excluded_names=sorted(self.exclude_names),hidden_directories='excluded' if self.skip_hidden else 'included',excluded_patterns=self.exclude_patterns,excluded_files=self.exclude_files,files=sum(counts.values()),counts=counts,passages=passages,vectors=vectors,semantic_error=self.vector_error,embedding_model=self.config['embedding_model'],directory_symlinks='canonical_targets_only',max_content_bytes=self.max_bytes)
 
     def search(self,query,limit=20):
         start=time.monotonic();terms,formats=query_terms(query);warnings=[];rankings=[];bodies={}
