@@ -80,6 +80,6 @@ checks. Existing dependency deprecation warnings are unrelated to this change.
 
 ## Research ECA follow-up — 2026-09-21
 
-The large final packet now counts 170325 under the unchanged 180000 limit (5.375% headroom), using a fenced-block parser fix plus actual account calibration. Full report/evidence bytes and claim-register inverse expansion verified over six real stage packets. Six live calibration probes (three per provider) request only a short acknowledgment; no existing completed research report is replaced. See ADR-011 for measurements, 17 named rules/guards and the remaining large-Claude-packet limitation.
+The large final packet now counts 170325 under the unchanged 180000 limit (5.375% headroom), using a fenced-block parser fix plus actual account calibration. Full report/evidence bytes and claim-register inverse expansion verified over six real stage packets. Six live calibration probes (three per provider) request only a short acknowledgment; no existing completed research report is replaced. See ADR-011 for measurements, 17 named rules/guards and the separately measured Claude 240000 budget (default/ChatGPT 180000 unchanged).
 
-Research tests: 133; account bridge tests: 18; frontend tests: 199. TypeScript and changed-module ESLint pass.
+Research tests: 134; account bridge tests: 18; frontend tests: 199. TypeScript and changed-module ESLint pass.

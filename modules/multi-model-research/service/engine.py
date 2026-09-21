@@ -86,10 +86,16 @@ class NotebookSink:
         return value['id']
 
 class Engine:
-    def __init__(self,store,provider,sink,token_counter,token_limit=90000,browser=None,budget=None):
+    def __init__(self,store,provider,sink,token_counter,token_limit=90000,browser=None,budget=None,input_limits=None):
         self.store=store;self.provider=provider;self.sink=sink;self.browser=browser
         self.token_counter=token_counter;self.token_limit=token_limit
         self.budget=budget
+        self.input_limits=dict(input_limits or {})
+        for provider,limit in self.input_limits.items():
+            if provider not in ('ChatGPT','Claude') or type(limit) is not int or limit<=0:
+                raise ValueError('Provider input limit must name an account provider and be positive.')
+            if limit>token_limit and (not budget or not getattr(budget.margins.get(provider),'calibration_fingerprint',None)):
+                raise ValueError('A larger provider budget requires runtime-bound measured calibration.')
         self.rules=ResearchRules()
         self.plan_cache={}
         self.lock=asyncio.Lock();self.tasks={};self.sync_locks={}
@@ -180,12 +186,13 @@ class Engine:
         stage.setdefault('policy_events',[]).append(record)
 
     def measure_input(self,prompt,stage):
+        limit=self.input_limits.get(stage['provider'],self.token_limit)
         if self.budget:
-            return self.budget.measure(prompt,stage['provider'],self.token_limit,SYSTEM,
+            return self.budget.measure(prompt,stage['provider'],limit,SYSTEM,
                                        stage.get('account_input_format','json-v1'))
         # Existing integrations that inject an already-adjusted counter remain compatible.
         count=self.token_counter(prompt)
-        return {'estimated_tokens':count,'automatic_input_limit':self.token_limit}
+        return {'estimated_tokens':count,'automatic_input_limit':limit}
 
     async def context_plan(self,run_id):
         run=await self.get(run_id)
@@ -216,7 +223,7 @@ class Engine:
                 measured=self.measure_input(prompt,stage)
                 reserve=sum(self.budget.output_tokens_by_round.get(s['round'],32000) for s in missing)
                 estimated=self.budget.from_counts(measured['raw_tokens']+reserve,
-                    measured['transport_raw_tokens']+reserve,stage['provider'],self.token_limit,
+                    measured['transport_raw_tokens']+reserve,stage['provider'],measured['automatic_input_limit'],
                     stage.get('account_input_format','json-v1')) if missing else measured
                 rows.append({'stage_id':stage['id'],'provider':stage['provider'],'round':stage['round'],
                     **estimated,'projection':bool(missing),'known_raw_tokens':measured['raw_tokens'],
@@ -318,7 +325,7 @@ class Engine:
                 self.record_policy(stage,policy,digest(prompt))
                 if policy['blocked']:
                     reasons=' '.join(f['message'] for f in policy['findings'] if f['action']=='block_submission')
-                    stage.update(status=policy['block_status'],next_retry_at=None,error=reasons+f' Girdi: {count:,}; sınır: {self.token_limit:,}.');continue
+                    stage.update(status=policy['block_status'],next_retry_at=None,error=reasons+f' Girdi: {count:,}; sınır: {measured["automatic_input_limit"]:,}.');continue
                 path=self.input_path(run,stage);path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
                 temporary=path.with_suffix('.tmp');temporary.touch(mode=0o600)
                 temporary.write_text(prompt);temporary.replace(path)

@@ -10,7 +10,7 @@ from packet_markdown import ledger_blocks, ledger_claims, compact_claims, expand
 from research_rules import ResearchRules
 from token_budget import TokenBudget, MARKDOWN_TRANSPORT
 from workflow import report_packet, digest, prompt_for
-from engine import ServiceError, AccountProvider
+from engine import Engine, ServiceError, AccountProvider
 from test_evidence_protocol import run, finish, claim
 from test_workflow import engine, create, add, settle
 
@@ -99,6 +99,15 @@ def test_admission_boundaries(count,blocked,rule):
     result=ResearchRules().evaluate(sample(),budget(count))
     assert result['blocked']==blocked
     if rule:assert rule in {f['id'] for f in result['findings']}
+
+
+def test_provider_limits_do_not_raise_chatgpt_and_require_bound_calibration():
+    b=TokenBudget(len,{'Claude':{'multiplier':1.95,'overhead_tokens':4096,'calibration_fingerprint':'f'*64}})
+    e=Engine(None,None,None,len,180000,budget=b,input_limits={'Claude':240000})
+    assert e.measure_input('text',{'provider':'ChatGPT'})['automatic_input_limit']==180000
+    assert e.measure_input('text',{'provider':'Claude'})['automatic_input_limit']==240000
+    with pytest.raises(ValueError,match='calibration'):
+        Engine(None,None,None,len,180000,budget=TokenBudget(len),input_limits={'Claude':240000})
 
 
 def test_reference_roundtrip_after_mermaid_preserves_rejection_history():
