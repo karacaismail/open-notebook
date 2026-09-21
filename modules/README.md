@@ -6,6 +6,7 @@ gate, navigation/page host and module settings screen.
 
 | Module | Ownership | Activation |
 |---|---|---|
+| `hybrid-search` | Multilingual passage search, rank fusion and local neural reranking for Search/Ask | Runtime UI/API gate |
 | `multi-model-research` | Eight-stage research, evidence protocol, imports, retries, UI, Chrome extension and native bridge | Runtime UI/API gate |
 | `account-models` | Signed-in Codex/Claude/Gemini CLI adapter | External service |
 | `local-audio` | Local Whisper transcription and macOS fallback speech | External service |

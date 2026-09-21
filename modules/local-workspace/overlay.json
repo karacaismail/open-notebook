@@ -262,9 +262,5 @@
   {
     "target": "frontend/src/lib/providers.tsx",
     "sha256_before": "c2575ae8b9b7a6d16a6bb4b377757e861e29bcdc8264a830ff292355f64d186d"
-  },
-  {
-    "target": "frontend/src/lib/types/search.ts",
-    "sha256_before": "94308a250f3a28409f740a78102968445d5d39c3ab051e0c1c1f655654617f31"
   }
 ]

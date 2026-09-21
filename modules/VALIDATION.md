@@ -83,3 +83,27 @@ checks. Existing dependency deprecation warnings are unrelated to this change.
 The large final packet now counts 170325 under the unchanged 180000 limit (5.375% headroom), using a fenced-block parser fix plus actual account calibration. Full report/evidence bytes and claim-register inverse expansion verified over six real stage packets. Six live calibration probes (three per provider) request only a short acknowledgment; no existing completed research report is replaced. See ADR-011 for measurements, 18 named rules/guards and the separately measured Claude 240000 budget (default/ChatGPT 180000 unchanged).
 
 Research tests: 140; account bridge tests: 18; frontend tests: 200. TypeScript and changed-module ESLint pass.
+
+## Local hybrid retrieval — 2026-09-21
+
+- New optional `hybrid-search` module: Turkish/English BM25, semantic retrieval,
+  RRF, document diversity, authenticated local BGE reranking, and shared Ask retrieval.
+- Ranking invariants: 9 tests. Module/search/Ask/parent regressions: 103 tests.
+  Frontend: 201 tests. TypeScript, changed-file ESLint and production build pass.
+- Real SurrealDB 2.6.5 + Ollama + pinned BGE integration: 30 synthetic multilingual
+  queries, recall@10 30/30, top-1 29/30, MRR@10 0.9708. Fusion alone has top-1
+  26/30 on the same set. These diagnostic fixtures informed tuning; they are not
+  a held-out benchmark or a guarantee for real questions.
+- Actual BM25/HNSW EXPLAIN plans checked. Notebook isolation, identical content
+  in another notebook, edited/deleted exclusion and incremental updates checked.
+- Production rollout: 20 original document hashes, 21 original source-vector hashes
+  and 16 completed research-report hashes retained. Additive index: 1376 passages.
+- Live browser checks: hybrid default, neural feedback, weak-match warning,
+  original-document modal, per-module settings, all nine enabled, mobile bounds,
+  no page errors. Only two read-only search POSTs; no live answer-generation run.
+- Full Ask factual correctness and representative PDF/OCR ingestion are not
+  claimed by these retrieval tests. Graph tests verify scope, shared retrieval,
+  diagnostic forwarding and rejection of unknown local-document citations.
+- Only API/frontend processes restarted. Database, worker, account/research/audio
+  services and originals preserved. Prior image, code, module state and native
+  database export retained for rollback; persistent build inputs updated.

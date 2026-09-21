@@ -1,6 +1,7 @@
 import { moduleEntries } from './generated'
 
 const en = {
+  hybrid: {"title": "Hybrid search", "recommended": "Recommended", "description": "Keyword and semantic retrieval with local reranking. Original sources stay unchanged.", "indexTitle": "Search infrastructure", "refresh": "Refresh index", "statusError": "Index status unavailable. Try refreshing.", "coverage": "{{documents}} documents · {{passages}} passages", "loading": "Checking index…", "timing": "{{ms}} ms", "candidates": "{{count}} candidates", "reranked": "Neural reranking", "fused": "Rank fusion", "scoreHelp": "Ranking score, not a probability or proof of truth.", "states": {"pending": "Preparing", "indexing": "Indexing", "ready": "Ready", "error": "Needs attention", "interrupted": "Interrupted"}, "warnings": {"weak_relevance": "The reranker found only weak matches. Broader hybrid results are retained; try a more specific question.", "index_updating": "New or changed documents are indexing; only current indexed versions appear.", "embedding_changed": "Embedding configuration changed; semantic search waits for the new index. Keyword search is available.", "lexical_unavailable": "Keyword retrieval failed; semantic results only.", "vector_unavailable": "Semantic retrieval failed; keyword results only.", "reranker_unavailable": "Local reranker unavailable or busy. Hybrid rank fusion is used."}},
   navigation: 'Navigation', chooseModule: 'Choose a module',
   general: 'General', settingsTab: 'Modules settings', settingsIntro: 'A workspace that works the way you do.',
   yourModules: 'Your modules', configuration: 'Module settings', preferences: 'Preferences',
@@ -18,8 +19,8 @@ const en = {
   details: 'Technical details', version: 'Version', application: 'When changes apply', onNextRequest: 'On the next request',
   openModule: 'Open module', export: 'Export configuration', noResults: 'No matching modules.',
   catalogHelp: 'Each module owns its settings. Dependencies keep connected features consistent.',
-  names: { 'multi-model-research': 'Multi-model research', 'account-models': 'Account models', 'local-audio': 'Local transcription', 'natural-voice': 'Natural voices', 'local-embeddings': 'Local embeddings', 'local-workspace': 'Workspace design', 'local-processing': 'Content processing', 'local-deployment': 'Local maintenance' },
-  descriptions: {
+  names: { 'hybrid-search': "Hybrid search", 'multi-model-research': 'Multi-model research', 'account-models': 'Account models', 'local-audio': 'Local transcription', 'natural-voice': 'Natural voices', 'local-embeddings': 'Local embeddings', 'local-workspace': 'Workspace design', 'local-processing': 'Content processing', 'local-deployment': 'Local maintenance' },
+  descriptions: { 'hybrid-search': "Keyword and semantic retrieval with local reranking. Original sources stay unchanged.",
     'multi-model-research': 'Independent research, cross-checks and a sourced final decision. These defaults apply only to new research.',
     'account-models': 'Use your signed-in ChatGPT, Claude and Gemini CLI accounts. Disabling stops new model requests through Open Notebook; CLI sessions remain intact.',
     'local-audio': 'Transcribe with local Whisper and use the macOS speech fallback. Disabling blocks the local audio integration without deleting models or recordings.',
@@ -30,6 +31,7 @@ const en = {
     'local-deployment': 'Portable maintenance tools. Export this policy for the backup command; it reads the enabled state and archive format before creating an archive.',
   },
   fields: {
+"searchCandidates": "Candidates per retriever", "searchCandidatesHelp": "More candidates can improve recall with additional work.", "rerankLimit": "Passages to rerank", "rerankLimitHelp": "Bound local neural inference work per search.", "askResults": "Documents per Ask query", "askResultsHelp": "Distinct documents for the answer; up to three passages each.", "rerankEnabled": "Local neural reranking", "rerankEnabledHelp": "Falls back to rank fusion with feedback if unavailable.", "searchSync": "Index refresh interval (seconds)", "searchSyncHelp": "Changed documents are reindexed in the background. Original data is retained.",
     timeout: 'Request timeout (seconds)', timeoutHelp: 'Waiting limit for model requests admitted by Open Notebook. Does not change the research CLI process deadline or restart running work.',
     language: 'Report language', languageHelp: 'Initial language for a new research question. Existing reports are preserved.',
     auto: 'Continue to synthesis', autoHelp: 'Automatically start the synthesis rounds after research reports are ready.',
@@ -52,6 +54,7 @@ const en = {
   saved: 'Module configuration saved.', back: 'Open notebooks', operationError: 'Module configuration could not be changed.',
 }
 const tr: typeof en = {
+  hybrid: {"title": "Hibrit arama", "recommended": "Önerilen", "description": "Anahtar kelime ve anlamsal erişim, yerel yeniden sıralama. Özgün kaynaklar korunur.", "indexTitle": "Arama altyapısı", "refresh": "İndeksi güncelle", "statusError": "İndeks durumu okunamadı. Yenilemeyi deneyin.", "coverage": "{{documents}} belge · {{passages}} aranabilir parça", "loading": "İndeks kontrol ediliyor…", "timing": "{{ms}} ms", "candidates": "{{count}} aday", "reranked": "Sinir ağıyla sıralandı", "fused": "Sıralamalar birleştirildi", "scoreHelp": "Sıralama puanıdır; olasılık veya doğruluk kanıtı değildir.", "states": {"pending": "Hazırlanıyor", "indexing": "İndeksleniyor", "ready": "Hazır", "error": "İnceleme gerekiyor", "interrupted": "Kesildi"}, "warnings": {"weak_relevance": "Yeniden sıralayıcı yalnız zayıf eşleşmeler buldu. Hibrit adaylar korundu; soruyu biraz daha belirginleştirin.", "index_updating": "Yeni veya değişen belgeler indeksleniyor; yalnız güncel indeksli sürümler gösterilir.", "embedding_changed": "Embedding değişti; anlamsal arama yeni indeksi bekliyor. Kelime araması kullanılabilir.", "lexical_unavailable": "Kelime araması çalışmadı; yalnız anlamsal sonuçlar gösteriliyor.", "vector_unavailable": "Anlamsal arama çalışmadı; yalnız kelime sonuçları gösteriliyor.", "reranker_unavailable": "Yerel sıralayıcı meşgul veya erişilemiyor. Hibrit birleşik sıralama kullanıldı."}},
   navigation: 'Gezinme', chooseModule: 'Modül seç',
   general: 'Genel', settingsTab: 'Modül ayarları', settingsIntro: 'Çalışma alanını kullanım biçimine göre düzenle.',
   yourModules: 'Modüllerin', configuration: 'Modül ayarları', preferences: 'Tercihler',
@@ -69,8 +72,8 @@ const tr: typeof en = {
   details: 'Teknik ayrıntılar', version: 'Sürüm', application: 'Uygulanma zamanı', onNextRequest: 'Sonraki istekte',
   openModule: 'Modülü aç', export: 'Yapılandırmayı dışa aktar', noResults: 'Eşleşen modül yok.',
   catalogHelp: 'Her modül kendi ayarlarını yönetir. Bağımlılıklar, bağlantılı özellikleri tutarlı tutar.',
-  names: { 'multi-model-research': 'Çok modelli araştırma', 'account-models': 'Hesap modelleri', 'local-audio': 'Yerel ses çözümleme', 'natural-voice': 'Doğal sesler', 'local-embeddings': 'Yerel vektörler', 'local-workspace': 'Çalışma alanı tasarımı', 'local-processing': 'İçerik işleme', 'local-deployment': 'Yerel bakım' },
-  descriptions: {
+  names: { 'hybrid-search': "Hibrit arama", 'multi-model-research': 'Çok modelli araştırma', 'account-models': 'Hesap modelleri', 'local-audio': 'Yerel ses çözümleme', 'natural-voice': 'Doğal sesler', 'local-embeddings': 'Yerel vektörler', 'local-workspace': 'Çalışma alanı tasarımı', 'local-processing': 'İçerik işleme', 'local-deployment': 'Yerel bakım' },
+  descriptions: { 'hybrid-search': "Anahtar kelime ve anlamsal eri\u015fim, yerel yeniden s\u0131ralama. \u00d6zg\u00fcn kaynaklar korunur.",
     'multi-model-research': 'Bağımsız araştırma, çapraz inceleme ve kaynaklı nihai karar. Buradaki varsayılanlar yalnızca yeni araştırmalara uygulanır.',
     'account-models': 'Oturumu açık ChatGPT, Claude ve Gemini CLI hesaplarını kullanır. Kapatmak Open Notebook içindeki yeni model isteklerini durdurur; hesap oturumları korunur.',
     'local-audio': 'Yerel Whisper ile ses çözümleme ve macOS seslendirme yedeği. Kapatmak modelleri ve kayıtları silmeden yerel ses bağlantısını durdurur.',
@@ -81,6 +84,7 @@ const tr: typeof en = {
     'local-deployment': 'Taşınabilir bakım araçları. Yedekleme komutu için bu politikayı dışa aktar; komut arşiv oluşturmadan önce etkinlik durumunu ve biçimi okur.',
   },
   fields: {
+"searchCandidates": "Her arama için aday sayısı", "searchCandidatesHelp": "Daha fazla aday erişimi artırabilir; işlem yükü yükselir.", "rerankLimit": "Yeniden sıralanacak parça sayısı", "rerankLimitHelp": "Arama başına yerel sinir ağı hesaplama sınırı.", "askResults": "Ask sorgusu başına belge", "askResultsHelp": "Yanıta aktarılan farklı belgeler; her birinden en çok üç parça.", "rerankEnabled": "Yerel sinir ağıyla sıralama", "rerankEnabledHelp": "Erişilemezse açıklamayla hibrit sıralama kullanılır.", "searchSync": "İndeks yenileme aralığı (saniye)", "searchSyncHelp": "Değişen belgeler arka planda indekslenir. Özgün veriler korunur.",
     timeout: 'İstek zaman aşımı (saniye)', timeoutHelp: 'Open Notebook üzerinden başlatılan model isteklerinin bekleme sınırı. Araştırma CLI süresini değiştirmez, çalışan işi yeniden başlatmaz.',
     language: 'Rapor dili', languageHelp: 'Yeni araştırma sorusunun başlangıç dili. Mevcut raporlar korunur.',
     auto: 'Senteze devam et', autoHelp: 'Araştırma raporları hazır olduğunda sentez aşamalarını otomatik başlat.',

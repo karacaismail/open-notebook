@@ -210,8 +210,12 @@ async def lifespan(app: FastAPI):
 
     logger.success("API initialization completed successfully")
 
-    # Yield control to the application
-    yield
+    from open_notebook.modules.search_adapter import SearchAdapter
+    await SearchAdapter.start()
+    try:
+        yield
+    finally:
+        await SearchAdapter.close()
 
     # Shutdown: cleanup if needed
     logger.info("API shutdown complete")

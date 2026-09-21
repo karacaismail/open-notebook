@@ -1,11 +1,13 @@
 // Search types
 export interface SearchRequest {
   query: string
-  type: 'text' | 'vector'
+  type: 'text' | 'vector' | 'hybrid'
   limit: number
   search_sources: boolean
   search_notes: boolean
   minimum_score: number
+  /** Restrict results to these notebooks; omit or empty for the whole knowledge base (#574, #87). */
+  notebook_ids?: string[]
 }
 
 export interface SearchResult {
@@ -27,6 +29,7 @@ export interface SearchResponse {
   results: SearchResult[]
   total_count: number
   search_type: string
+  diagnostics?: RetrievalDiagnostics
 }
 
 // Ask types
@@ -35,6 +38,8 @@ export interface AskRequest {
   strategy_model: string
   answer_model: string
   final_answer_model: string
+  /** Restrict every search of the strategy to these notebooks; omit or empty for all (#574, #87). */
+  notebook_ids?: string[]
 }
 
 export interface AskResponse {
@@ -51,11 +56,13 @@ export interface StrategyData {
   }>
 }
 
-export interface AskStreamEvent {
-  type: 'strategy' | 'answer' | 'final_answer' | 'complete' | 'error'
+export interface AskStreamEvent extends Partial<RetrievalDiagnostics> {
+  type: 'strategy' | 'answer' | 'final_answer' | 'complete' | 'error' | 'retrieval'
   reasoning?: string
   searches?: Array<{ term: string; instructions: string }>
   content?: string
   final_answer?: string
   message?: string
 }
+
+export interface RetrievalDiagnostics { mode: string; warnings: string[]; channels: string[]; reranked: boolean; candidates: number; indexed_documents: number; pending_documents: number; timings: {total_ms:number;retrieval_ms:number;rerank_ms?:number} }
