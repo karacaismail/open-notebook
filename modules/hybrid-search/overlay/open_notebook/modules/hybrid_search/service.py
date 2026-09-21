@@ -91,7 +91,9 @@ class HybridSearch:
         if not fresh:
             if max_age is None:
                 try:
-                    max_age = settings()['metadata_cache_seconds']
+                    # A module without this field in its manifest, or a disabled one,
+                    # still reuses the default window instead of rehashing per query.
+                    max_age = settings().get('metadata_cache_seconds', DEFAULTS['metadata_cache_seconds'])
                 except Exception:
                     max_age = DEFAULTS['metadata_cache_seconds']
             async with self.meta_lock:
