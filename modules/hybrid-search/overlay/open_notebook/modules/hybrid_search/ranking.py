@@ -40,8 +40,19 @@ def passages(text: str, max_bytes: int = 1600, overlap: int = 160):
 
 
 def fuse(rankings: dict[str, list[dict]], k: int = 60) -> list[dict]:
+    """Reciprocal rank fusion over channel families.
+
+    The Turkish and English lexical indexes hold identical text and differ only in
+    their analyzer, so a document found by both is one piece of evidence rather
+    than two votes. Halving each of them expressed that, but it also halved a
+    document that only one analyzer could match - exactly the exact-keyword case
+    hybrid retrieval exists to serve. Collapsing them into one family at their
+    best rank keeps the first property and removes the second.
+    """
     merged = {}
+    best = {}
     for channel, rows in rankings.items():
+        family = 'lexical' if channel.startswith('bm25_') else channel
         seen = set()
         for rank, row in enumerate(rows, 1):
             key = str(row['id'])
@@ -49,9 +60,13 @@ def fuse(rankings: dict[str, list[dict]], k: int = 60) -> list[dict]:
                 continue
             seen.add(key)
             hit = merged.setdefault(key, {**row, 'rrf_score': 0.0, 'channels': [], 'ranks': {}})
-            hit['rrf_score'] += (.5 if channel.startswith('bm25_') else 1.0)/(k+rank)
             hit['channels'].append(channel)
             hit['ranks'][channel] = rank
+            slot = (family, key)
+            if rank < best.get(slot, rank+1):
+                best[slot] = rank
+    for (_, key), rank in best.items():
+        merged[key]['rrf_score'] += 1.0/(k+rank)
     return sorted(merged.values(), key=lambda r: (-r['rrf_score'], str(r['id'])))
 
 
