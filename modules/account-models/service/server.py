@@ -14,6 +14,7 @@ import subprocess
 import threading
 import time
 import uuid
+from cancellation import JOBS, RequestCancelled
 from preliminary import PROFILES, WEB_SYSTEM, command as preliminary_command, trace as preliminary_trace, capabilities as preliminary_capabilities
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -21,6 +22,7 @@ ROOT = Path(os.environ.get('ACCOUNT_BRIDGE_ROOT', Path(__file__).resolve().paren
 CONFIG = json.loads((ROOT / 'config.json').read_text())
 TOKEN = (ROOT / '.bridge-key').read_text().strip()
 MODELS = CONFIG['models']
+JOBS.directory = ROOT / 'request-state'
 RUN_DIR = ROOT / 'empty-workspace'
 RUN_DIR.mkdir(exist_ok=True)
 SYSTEM = (
@@ -57,10 +59,12 @@ class AccountQueue:
             self.waiters.append(ticket)
             try:
                 while self.active or self.waiters[0] is not ticket:
+                    JOBS.check()
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise BridgeError('The account queue wait timed out. Retry or choose another account model.', 504)
-                    self.condition.wait(remaining)
+                    self.condition.wait(min(remaining, 0.2))
+                JOBS.check()
                 self.waiters.popleft()
                 self.active = True
             except BaseException:
@@ -216,14 +220,19 @@ def run_cli(model, prompt, profile='default'):
         # AGY silently falls back to its general-purpose agent when a persona is
         # missing. Refuse that fallback so notebook requests keep the text profile.
         try:
-            available = subprocess.run(
-                [CONFIG['executables']['gemini'], 'agents'], capture_output=True,
-                text=True, cwd=str(RUN_DIR), env=cli_env(provider), timeout=20)
+            probe = JOBS.spawn([CONFIG['executables']['gemini'], 'agents'], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, cwd=str(RUN_DIR), env=cli_env(provider), start_new_session=True)
+            try:
+                probe_out, _ = probe.communicate(timeout=20)
+            except subprocess.TimeoutExpired:
+                JOBS.signal(probe, signal.SIGKILL); probe.communicate(); raise
+            JOBS.check()
+            available = subprocess.CompletedProcess(probe.args, probe.returncode, probe_out)
         except (OSError, subprocess.TimeoutExpired):
             raise BridgeError('The Gemini text profile could not be checked.', 503)
         if available.returncode or agent_name not in available.stdout.splitlines():
             raise BridgeError('The Gemini text profile is missing. Run Baslat.command to restore it.', 503)
-    proc = subprocess.Popen(command_for(model, profile), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    proc = JOBS.spawn(command_for(model, profile), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, cwd=str(RUN_DIR),
                             env=cli_env(provider), start_new_session=True)
     try:
@@ -241,6 +250,7 @@ def run_cli(model, prompt, profile='default'):
             os.killpg(proc.pid, signal.SIGKILL)
             proc.communicate()
         raise BridgeError('Account CLI timed out. Retry with less context.', 504)
+    JOBS.check()
     text = ''
     usage = {}
     incomplete = False
@@ -340,7 +350,7 @@ def parse_json_answer(text):
 def completion(body):
     prompt, function, response_format = prepare_prompt(body)
     model = body['model']
-    with QUEUES[model].slot():
+    with JOBS.request(body.get('local_request_id')), QUEUES[model].slot():
         if body.get('local_profile') in ('research_synthesis', *PROFILES):
             text, usage = run_cli(model, prompt, body['local_profile'])
         else:
@@ -396,7 +406,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == '/health':
-            self.send_json(200, {'status': 'healthy', 'adapter': 'official-account-cli',
+            self.send_json(200, {'status': 'healthy', 'adapter': 'official-account-cli', 'request_cancellation': True,
                                  'runtime_fingerprints': {model: runtime_fingerprint(model) for model in MODELS if MODELS[model]['provider'] in ('codex','claude')},
                                  'prompt_formats': ['json-v1','research-markdown-v1'],
                                  'preliminary': preliminary_capabilities(MODELS),
@@ -414,6 +424,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.authorized():
             return
+        if self.path.startswith('/v1/requests/') and self.path.endswith('/cancel'):
+            try:
+                result = JOBS.cancel(self.path.split('/')[3])
+                self.send_json(200, result)
+            except ValueError:
+                self.send_json(400, {'error': {'message': 'Invalid local request ID.'}})
+            return
         if self.path.rstrip('/') != '/v1/chat/completions':
             self.send_json(404, {'error': {'message': 'Only text chat completions are supported.'}})
             return
@@ -426,6 +443,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.stream_completion(body)
             else:
                 self.send_json(200, completion(body))
+        except RequestCancelled as exc:
+            self.send_json(409, {'error': {'message': str(exc), 'type': 'request_cancelled'}})
         except BridgeError as exc:
             self.send_json(exc.status, {'error': {'message': str(exc), 'type': 'account_bridge_error'}})
         except (ValueError, TypeError, KeyError):
@@ -485,4 +504,9 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     server = ThreadingHTTPServer(('127.0.0.1', CONFIG.get('port', 8317)), Handler)
     print('Account bridge listening on localhost; official CLI sessions remain with their providers.', flush=True)
+    def shutdown(signum, frame):
+        JOBS.shutdown()
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
     server.serve_forever()

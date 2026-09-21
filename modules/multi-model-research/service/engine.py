@@ -22,6 +22,15 @@ class AccountProvider:
         self.key_path=key_path
         # Must exceed the bridge's own CLI timeout so the bridge reports the real reason.
         self.timeout=timeout
+    async def cancel(self,stage):
+        ident=stage.get('request_id')
+        if not ident:raise ServiceError('Eski istekte durdurma kimliği yok; işlem bitene kadar duraklatabilirsiniz.',409)
+        async with httpx.AsyncClient(timeout=12) as client:
+            response=await client.post('http://127.0.0.1:8317/v1/requests/'+ident+'/cancel',
+                headers={'Authorization':'Bearer '+self.key_path.read_text().strip()})
+            if response.status_code!=200 or not response.json().get('settled'):
+                raise ServiceError('Hesap işleminin durduğu doğrulanamadı. Yeni istek başlatılmadı; durdurmayı tekrar deneyin.',503)
+
     async def synthesize(self,stage,prompt):
         model={'ChatGPT':'chatgpt-account','Claude':'claude-account','Gemini':'gemini-account'}[stage['provider']]
         profile=stage.get('account_profile','research_synthesis')
@@ -36,7 +45,7 @@ class AccountProvider:
                     raise ServiceError(policy['findings'][0]['message'],503,kind='calibration_required',policy=policy)
             response=await client.post('http://127.0.0.1:8317/v1/chat/completions',
                 headers={'Authorization':'Bearer '+self.key_path.read_text().strip()},
-                json={'model':model,'local_profile':profile,'stream':False,
+                json={'model':model,'local_profile':profile,'stream':False,'local_request_id':stage.get('request_id'),
                       'local_prompt_format':stage.get('account_input_format','json-v1'),
                       'messages':[{'role':'system','content':system_for(stage)},{'role':'user','content':prompt}]})
         if response.status_code!=200:
@@ -111,8 +120,9 @@ class Engine:
         self.provider_locks={p:asyncio.Lock() for p in ('ChatGPT','Claude','Gemini')}
         self.background=set()
         self.retry_task=None
+        self.control_tasks={}
     async def recover(self):
-        resume=[]
+        resume=[];stops=[]
         async with self.lock:
             for run in await self.store.all():
                 for s in run['stages']:
@@ -126,8 +136,10 @@ class Engine:
                         s['status']='ready';s['error']=None
                     elif s['status']=='running':
                         s['status']='interrupted';s['error']='Servis yeniden başladı. Tamamlanan raporlar korundu; bu aşamayı açıkça devam ettirin.'
+                if run.get('control_state')=='stopping':stops.append((run['id'],run.get('stop_target','stopped')))
                 refresh_status(run);await self.store.save(run)
                 if run.get('execution_mode')=='browser' and not run['paused']:resume.append(run['id'])
+        for run_id,target in stops:self.start_stop(run_id,target)
         for run_id in resume:await self.kick(run_id)
         if self.retry_task is None:self.retry_task=asyncio.create_task(self.retry_loop())
         # Browser jobs reconcile their durable submission journal; account calls never auto-repeat.
@@ -334,7 +346,7 @@ class Engine:
     async def kick(self,run_id):
         async with self.lock:
             run=await self.get(run_id)
-            if run['paused']:return
+            if run['paused'] or run.get('control_state'):return
             launches=[]
             for stage in run['stages']:
                 if stage['mode'] not in ('account','browser') or stage['status']!='ready':continue
@@ -365,7 +377,7 @@ class Engine:
                 path=self.input_path(run,stage);path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
                 temporary=path.with_suffix('.tmp');temporary.touch(mode=0o600)
                 temporary.write_text(prompt);temporary.replace(path)
-                stage.update(status='running',started_at=now(),finished_at=None,error=None,attempts=stage['attempts']+1,input_sha256=digest(prompt))
+                stage.update(request_id=uuid.uuid4().hex,request_dispatched=False,status='running',started_at=now(),finished_at=None,error=None,attempts=stage['attempts']+1,input_sha256=digest(prompt))
                 launches.append((stage['id'],prompt))
             refresh_status(run);await self.store.save(run)
             for stage_id,prompt in launches:
@@ -381,7 +393,7 @@ class Engine:
             async with self.provider_locks[stage['provider']]:
                 async with self.lock:
                     latest=await self.get(run_id)
-                    if latest['paused']:
+                    if latest['paused'] or latest.get('control_state'):
                         queued=self.stage(latest,stage_id)
                         queued.update(status='ready',started_at=None,attempts=max(0,queued['attempts']-1))
                         refresh_status(latest);await self.store.save(latest)
@@ -392,6 +404,12 @@ class Engine:
                     browser_report=await self.browser.research(run_id,stage,prompt,lambda value:self.browser_progress(run_id,stage_id,value))
                     text=browser_report['content'];usage={}
                 else:
+                    async with self.lock:
+                        latest=await self.get(run_id)
+                        current=self.stage(latest,stage_id)
+                        if latest.get('control_state'):return
+                        current['request_dispatched']=True
+                        await self.store.save(latest)
                     text,usage=await self.provider.synthesize(stage,prompt)
             async with self.lock:
                 run=await self.get(run_id);stage=self.stage(run,stage_id)
@@ -410,6 +428,10 @@ class Engine:
             async with self.lock:
                 run=await self.get(run_id);stage=self.stage(run,stage_id)
                 resumable=stage['mode']=='browser' and self.browser is not None and self.browser.can_resume(run_id,stage_id)
+                if run.get('control_state'):
+                    stage.update(status='interrupted',error='Kullanıcı işlemi durdurdu. Tamamlanmış raporlar korundu.',next_retry_at=None)
+                    refresh_status(run);await self.store.save(run)
+                    raise
                 stage.update(status='interrupted',error=('Servis durdu. Tarayıcı işi kayıtlı; yeniden başlatıldığında aynı araştırma yeniden gönderilmeden kontrol edilir.' if resumable
                     else 'Servis durdu. İstek sağlayıcıda bitmiş olabilir; otomatik olarak tekrarlanmadı.'));refresh_status(run);await self.store.save(run)
             raise
@@ -418,7 +440,8 @@ class Engine:
                 run=await self.get(run_id);stage=self.stage(run,stage_id)
                 stage.update(status=(exc.kind or 'failed') if isinstance(exc,(BrowserAttention,ServiceError)) else 'failed',error=str(exc) if isinstance(exc,(ServiceError,BrowserAttention)) else 'Aşama tamamlanamadı. Bağlantıyı kontrol edip devam edin.',finished_at=now())
                 if isinstance(exc,ServiceError) and exc.policy:self.record_policy(stage,exc.policy,stage.get('input_sha256'))
-                self.arm_retry(stage)
+                if not run.get('control_state'):self.arm_retry(stage)
+                else:stage['next_retry_at']=None
                 refresh_status(run);await self.store.save(run)
         finally:self.tasks.pop((run_id,stage_id),None)
         await self.kick(run_id);self.schedule_sync(run_id)
@@ -459,7 +482,7 @@ class Engine:
         due=[]
         async with self.lock:
             for run in await self.store.all():
-                if run['paused']:continue
+                if run['paused'] or run.get('control_state'):continue
                 changed=False
                 for stage in run['stages']:
                     if self.retry_due(stage):
@@ -475,10 +498,21 @@ class Engine:
             except asyncio.CancelledError:raise
             except Exception:continue
 
-    async def retry_stage(self,run_id,stage_id):
+    @staticmethod
+    def control_snapshot(run):
+        return {'status':run['status'],'paused':run['paused'],'control_state':run.get('control_state'),
+                'stages':[[s['id'],s['status'],s['attempts']] for s in run['stages']]}
+
+    def check_control_snapshot(self,run,expected):
+        if expected is not None and expected!=self.control_snapshot(run):
+            raise ServiceError('Araştırmanın durumu değişti. Güncel etkileri inceleyip yeniden onaylayın.',409)
+
+    async def retry_stage(self,run_id,stage_id,expected_state=None):
         """User-triggered retry of one stalled stage. Resets the backoff schedule."""
         async with self.lock:
             run=await self.get(run_id);stage=self.stage(run,stage_id)
+            self.check_control_snapshot(run,expected_state)
+            if run.get('control_state'):raise ServiceError('Önce araştırma kontrollerinden devam edin; durdurulmuş araştırma tek aşama düğmesiyle başlatılamaz.',409)
             if stage['status']=='running':raise ServiceError('Bu aşama zaten çalışıyor.',409)
             if stage['status'] not in ATTENTION:raise ServiceError('Bu aşama tekrar denemeye uygun değil.',409)
             if stage['mode'] not in ('account','browser'):raise ServiceError('Elle içe aktarılan aşama tekrar denenmez.',409)
@@ -489,9 +523,53 @@ class Engine:
         await self.kick(run_id)
         return await self.get(run_id)
 
-    async def action(self,run_id,action):
+    def start_stop(self,run_id,target):
+        if run_id in self.control_tasks:return
+        task=asyncio.create_task(self.finish_stop(run_id,target))
+        self.control_tasks[run_id]=task
+        task.add_done_callback(lambda _:self.control_tasks.pop(run_id,None))
+
+    async def finish_stop(self,run_id,target):
+        errors=[]
+        run=await self.get(run_id)
+        for stage in run['stages']:
+            if stage['status']=='completed':continue
+            task=self.tasks.get((run_id,stage['id']))
+            if stage['mode']=='account' and (stage.get('request_dispatched') or stage['status']=='running' and 'request_dispatched' not in stage):
+                try:await self.provider.cancel(stage)
+                except Exception as exc:
+                    errors.append(str(exc) if isinstance(exc,ServiceError) else 'Hesap bağlantısı durdurmayı doğrulayamadı.');continue
+            if task:
+                task.cancel()
+                await asyncio.gather(task,return_exceptions=True)
         async with self.lock:
             run=await self.get(run_id)
+            for stage in run['stages']:
+                stage['next_retry_at']=None
+                if stage['status']=='running' and (run_id,stage['id']) not in self.tasks:
+                    stage.update(status='interrupted',error='Kullanıcı tarafından durduruldu. Tamamlanan raporlar korunuyor.')
+            run.update(control_state='stop_failed' if errors else target,control_error=' '.join(errors) or None)
+            refresh_status(run);await self.store.save(run)
+        self.schedule_sync(run_id)
+
+    async def action(self,run_id,action,expected_state=None):
+        async with self.lock:
+            run=await self.get(run_id)
+            self.check_control_snapshot(run,expected_state)
+            control=run.get('control_state')
+            if action in ('stop','cancel'):
+                if run['status']=='completed':raise ServiceError('Tamamlanmış araştırma durdurulamaz.',409)
+                if control=='stopping':return run
+                if control=='cancelled':return run
+                run.update(paused=True,control_state='stopping',stop_target='cancelled' if action=='cancel' else 'stopped',control_error=None)
+                for stage in run['stages']:stage['next_retry_at']=None
+                refresh_status(run);await self.store.save(run)
+                self.start_stop(run_id,run['stop_target'])
+                return run
+            if control in ('stopping','stop_failed'):
+                raise ServiceError('İşlemlerin durduğu henüz doğrulanmadı. Önce durdurmayı tamamlayın.',409)
+            if control=='cancelled' and action!='restore':
+                raise ServiceError('Vazgeçilmiş araştırma yalnız açıkça geri yüklenerek sürdürülebilir.',409)
             if action=='pause':run['paused']=True
             elif action=='automate':
                 if run.get('execution_mode')=='browser':return run
@@ -499,18 +577,20 @@ class Engine:
                     raise ServiceError('Başlamış araştırmanın yürütme yöntemi değiştirilemez.',409)
                 if not self.browser:raise ServiceError('Chrome araştırma bağlantısı yapılandırılmadı.',503)
                 run.update(execution_mode='browser',paused=False,auto_synthesize=True,stages=initial_stages('browser',run.get('preliminary',False)))
-            elif action=='resume':
-                run['paused']=False;run['auto_synthesize']=True
+            elif action in ('resume','restore'):
+                if action=='restore' and control!='cancelled':raise ServiceError('Bu araştırma vazgeçilmiş durumda değil.',409)
+                if any(s['status']=='running' for s in run['stages']):raise ServiceError('Çalışan aşamalar bitmeden yeniden başlatılamaz.',409)
+                run.update(paused=False,auto_synthesize=True,control_state=None,control_error=None)
                 for stage in run['stages']:
                     if stage['mode'] in ('account','browser') and stage['status'] in ATTENTION:
                         stage.update(status='ready',error=None,retry_index=0,next_retry_at=None)
             else:raise ServiceError('Bilinmeyen işlem.')
             refresh_status(run);await self.store.save(run)
-        if action in ('resume','automate'):await self.kick(run_id)
+        if action in ('resume','restore','automate'):await self.kick(run_id)
         return await self.get(run_id)
     async def close(self):
         if self.retry_task:self.retry_task.cancel()
-        tasks=list(self.tasks.values())+list(self.background)+([self.retry_task] if self.retry_task else [])
+        tasks=list(self.control_tasks.values())+list(self.tasks.values())+list(self.background)+([self.retry_task] if self.retry_task else [])
         for task in tasks:task.cancel()
         await asyncio.gather(*tasks,return_exceptions=True)
         if self.browser:

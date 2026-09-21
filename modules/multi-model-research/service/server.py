@@ -72,7 +72,7 @@ async def service_error(request,exc):return JSONResponse({'detail':str(exc)},sta
 @app.get('/health')
 async def health():
     browser=BROWSER.runtime if BROWSER else None
-    return {'status':'healthy' if ENGINE else 'loading','active_synthesis':len(ENGINE.tasks) if ENGINE else 0,
+    return {'status':'healthy' if ENGINE else 'loading','research_controls':'v1','active_synthesis':len(ENGINE.tasks)+len(ENGINE.control_tasks) if ENGINE else 0,
             'pending_exports':len(ENGINE.background) if ENGINE else 0,
             'mode':'browser_research' if BROWSER else 'web_research_imports',
             'browser_transport':getattr(browser,'transport','playwright') if browser else None,
@@ -194,16 +194,19 @@ async def import_report(run_id:str,stage_id:str,text:str=Form(''),origin_url:str
         name,content=await read(upload);evidence.append({'name':name,'content':content,'sha256':digest(content)})
     return await ENGINE.import_report(run_id,stage_id,text,evidence,origin_url,packet_sha,originals,researched_at.isoformat() if researched_at else None)
 
+class ControlRequest(BaseModel):
+    expected_state: dict | None = None
+
 @app.post('/runs/{run_id}/stages/{stage_id}/retry')
-async def retry_stage(run_id:str,stage_id:str):
+async def retry_stage(run_id:str,stage_id:str,body:ControlRequest | None=None):
     """User-triggered retry of one stalled stage; also resets its backoff schedule."""
-    return await ENGINE.retry_stage(run_id,stage_id)
+    return await ENGINE.retry_stage(run_id,stage_id,body.expected_state if body else None)
 
 @app.post('/runs/{run_id}/{action}')
-async def action(run_id:str,action:str):
+async def action(run_id:str,action:str,body:ControlRequest | None=None):
     if action=='sync':return await ENGINE.sync(run_id)
     if action=='automate' and not BROWSER:raise ServiceError('Chrome araştırma bağlantısı yapılandırılmadı.',503)
-    return await ENGINE.action(run_id,action)
+    return await ENGINE.action(run_id,action,body.expected_state if body else None)
 
 @app.get('/runs/{run_id}/export')
 async def export(run_id:str):

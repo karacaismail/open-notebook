@@ -96,10 +96,15 @@ describe('Server-backed retry display', () => {
     expect(onRetry).not.toHaveBeenCalled()
   })
 
-  it('allows an immediate manual retry and disables a pending request', () => {
+  it('requires two confirmations for manual retry and disables a pending request', async () => {
     const stage = makeStage(), run = makeRun(stage), onRetry = vi.fn()
     const view = render(<ResearchRetryPanel run={run} stage={stage} onRetry={onRetry} />)
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(onRetry).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'I understand, continue' }))
+    expect(onRetry).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('checkbox'))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Yes, Try again' })) })
     expect(onRetry).toHaveBeenCalledTimes(1)
     view.rerender(<ResearchRetryPanel run={run} stage={stage} pending onRetry={onRetry} />)
     expect(screen.getByRole('button', { name: 'Try again' })).toBeDisabled()

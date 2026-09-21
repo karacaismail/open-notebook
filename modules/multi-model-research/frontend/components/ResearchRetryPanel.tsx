@@ -4,8 +4,9 @@ import { useEffect, useState } from 'react'
 import { Clock3, Loader2, Pause, RotateCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/lib/hooks/use-translation'
-import type { ResearchRun, ResearchStage } from '@/modules/multi-model-research/api'
+import type { ResearchRun, ResearchStage, ControlSnapshot } from '@/modules/multi-model-research/api'
 import { cn } from '@/lib/utils'
+import { ResearchActionDialog } from './ResearchActionDialog'
 import { attentionStates, canRetryStage, hasRunningStage } from './research-state'
 
 // Presentation of workflow.py's schedule. Scheduling belongs exclusively to the server.
@@ -28,9 +29,10 @@ export function countdownText(seconds: number) {
 }
 
 export function ResearchRetryPanel({ run, stage, onRetry, pending = false }: {
-  run: ResearchRun; stage: ResearchStage; onRetry: () => void; pending?: boolean
+  run: ResearchRun; stage: ResearchStage; onRetry: (snapshot: ControlSnapshot) => void | Promise<unknown>; pending?: boolean
 }) {
   const { t, language } = useTranslation()
+  const [confirming, setConfirming] = useState(false)
   const [now, setNow] = useState(0)
   useEffect(() => {
     setNow(Date.now())
@@ -65,8 +67,9 @@ export function ResearchRetryPanel({ run, stage, onRetry, pending = false }: {
       {timing.scheduled && !run.paused && <div role="progressbar" aria-label={t('research.retryWaitProgress')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(timing.progress)} className="mt-3 h-1 overflow-hidden rounded-full bg-amber-500/10"><div className="h-full rounded-full bg-amber-500" style={{ width: `${now ? timing.progress : 0}%` }} /></div>}
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
         <p className="min-w-[160px] flex-1 text-xs leading-relaxed text-muted-foreground">{t(busy ? 'research.retryAfterActive' : run.paused ? 'research.retryPausedHelp' : timing.scheduled ? 'research.retryCountdownHelp' : timing.exhausted ? 'research.autoRetryExhausted' : 'research.retryActionHelp')}</p>
-        {eligible && <Button size="sm" variant="outline" disabled={pending} className="min-h-10 border-amber-500/40 bg-background" title={t(run.paused ? 'research.retryResumesRun' : 'research.retryHelp')} onClick={onRetry}>{pending ? <Loader2 aria-hidden className="me-2 size-4 motion-safe:animate-spin" /> : <RotateCw aria-hidden className="me-2 size-4" />}{t('research.retry')}</Button>}
+        {eligible && <Button size="sm" variant="outline" disabled={pending} className="min-h-10 border-amber-500/40 bg-background" title={t(run.paused ? 'research.retryResumesRun' : 'research.retryHelp')} onClick={() => setConfirming(true)}>{pending ? <Loader2 aria-hidden className="me-2 size-4 motion-safe:animate-spin" /> : <RotateCw aria-hidden className="me-2 size-4" />}{t('research.retry')}</Button>}
       </div>
     </div>}
+    {confirming && eligible && <ResearchActionDialog run={run} action="retry" stageId={stage.id} onClose={() => setConfirming(false)} onConfirm={async snapshot => onRetry(snapshot)} />}
   </section>
 }

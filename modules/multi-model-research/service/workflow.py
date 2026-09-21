@@ -141,7 +141,8 @@ def refresh_status(run):
         if stage['status']=='pending' and ready(run,stage):
             stage['status']='waiting_input' if stage['mode']=='import' else 'ready'
     states=[s['status'] for s in run['stages']]
-    if all(x=='completed' for x in states):run['status']='completed'
+    if run.get('control_state'):run['status']=run['control_state']
+    elif all(x=='completed' for x in states):run['status']='completed'
     elif run.get('paused'):run['status']='paused'
     elif 'running' in states:run['status']='running'
     elif any(x in ATTENTION for x in states):run['status']='needs_attention'

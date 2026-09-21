@@ -92,7 +92,7 @@ function StageDetail({run,stage}:{run:ResearchRun;stage:ResearchStage}) {
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">{t(roundKeys[stage.round])}</p><h2 className="text-xl font-semibold">{stage.provider}</h2></div><Status value={stage.status}/></div>
     {!unlocked?<p className="py-8 text-muted-foreground">{t('research.blocked')}</p>:<>
       <ResearchStopFeedback stage={stage}/>
-      <ResearchRetryPanel run={run} stage={stage} pending={retry.isPending} onRetry={()=>retry.mutate({id:run.id,stage:stage.id})}/>
+      <ResearchRetryPanel run={run} stage={stage} pending={retry.isPending} onRetry={expectedState=>retry.mutateAsync({id:run.id,stage:stage.id,expectedState})}/>
       {packet.data?.evidence_packet&&<SharedEvidencePacket packet={packet.data} onDownload={async()=>{try{const shared=packet.data!.evidence_packet!;downloadResearchFile(await researchApi.evidence(run.id,stage.id),'evidence-'+shared.sha256.slice(0,12)+(shared.format==='json'?'.json':'.md'))}catch(err){error(err)}}}/>}
       <ResearchPolicyPanel policy={stage.policy ?? packet.data?.policy}/>
       {stage.report?<div className="space-y-5">

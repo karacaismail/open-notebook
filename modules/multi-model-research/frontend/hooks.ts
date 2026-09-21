@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { isAxiosError } from 'axios'
-import { researchApi, ResearchCreate, ResearchRun } from '@/modules/multi-model-research/api'
+import { researchApi, ResearchCreate, ResearchRun, ControlSnapshot } from '@/modules/multi-model-research/api'
 import { QUERY_KEYS as CORE_KEYS } from '@/lib/api/query-client'
 const QUERY_KEYS = { ...CORE_KEYS, research: ['module', 'multi-model-research'] as const, researchRun: (id:string)=>['module','multi-model-research',id] as const, researchPacket: (id:string,stage:string)=>['module','multi-model-research','packet',id,stage] as const }
 import { useTranslation } from '@/lib/hooks/use-translation'
@@ -33,7 +33,7 @@ export function useResearchActions() {
   const error=(err:unknown)=>toast.error(isAxiosError(err)&&typeof err.response?.data?.detail==='string'?err.response.data.detail:t('research.error'))
   const create=useMutation({mutationFn:({body,key}:{body:ResearchCreate;key:string})=>researchApi.create(body,key),retry:false,onSuccess:run=>{success(run);toast.success(t('research.created'))},onError:error})
   const upload=useMutation({mutationFn:({id,stage,data}:{id:string;stage:string;data:FormData})=>researchApi.import(id,stage,data),retry:false,onSuccess:run=>{success(run);toast.success(t('research.imported'))},onError:error})
-  const action=useMutation({mutationFn:({id,action}:{id:string;action:'pause'|'resume'|'sync'|'automate'})=>researchApi.action(id,action),retry:false,onSuccess:success,onError:error})
-  const retry=useMutation({mutationFn:({id,stage}:{id:string;stage:string})=>researchApi.retryStage(id,stage),retry:false,onSuccess:run=>{success(run);toast.success(t('research.retryStarted'))},onError:error})
+  const action=useMutation({mutationFn:({id,action,expectedState}:{id:string;expectedState?:ControlSnapshot;action:'pause'|'resume'|'sync'|'automate'|'stop'|'cancel'|'restore'})=>researchApi.action(id,action,expectedState),retry:false,onSuccess:success,onError:error})
+  const retry=useMutation({mutationFn:({id,stage,expectedState}:{id:string;stage:string;expectedState?:ControlSnapshot})=>researchApi.retryStage(id,stage,expectedState),retry:false,onSuccess:run=>{success(run);toast.success(t('research.retryStarted'))},onError:error})
   return {create,upload,action,retry,error}
 }

@@ -116,7 +116,7 @@ bridge_start() {
   mkdir -p "$BRIDGE_DIR/logs" "$BRIDGE_DIR/empty-workspace" "$HOME/.gemini/config/agents"
   chmod 700 "$BRIDGE_DIR"
   local changed=0 file
-  for file in server.py config.json .bridge-key service.plist; do
+  for file in server.py cancellation.py preliminary.py notebook-preliminary.md config.json .bridge-key service.plist; do
     if ! cmp -s "$DIR/account-bridge/$file" "$BRIDGE_DIR/$file"; then
       cp "$DIR/account-bridge/$file" "$BRIDGE_DIR/$file"
       changed=1

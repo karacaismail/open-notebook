@@ -30,7 +30,7 @@ export function ResearchAttentionSummary({ run, onSelect }: { run: ResearchRun; 
   if (!stages.length && !run.paused && !run.sync_error) return null
   return <section className="space-y-3 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4 sm:p-5" aria-label={t('research.stopSummary')}>
     <h2 className="flex items-center gap-2 text-sm font-semibold"><AlertCircle aria-hidden className="size-4 text-amber-600 dark:text-amber-400" />{t('research.stopSummary')}</h2>
-    {run.paused && <p className="flex items-start gap-2 text-sm"><PauseCircle aria-hidden className="mt-0.5 size-4 shrink-0" />{t('research.stopPaused')}</p>}
+    {run.paused && <p className="flex items-start gap-2 text-sm"><PauseCircle aria-hidden className="mt-0.5 size-4 shrink-0" />{t(run.control_state ? 'research.controlHelp_' + run.control_state : 'research.stopPaused')}</p>}
     {stages.map(stage => <div key={stage.id} className="flex flex-wrap items-start justify-between gap-3 rounded-xl border bg-card p-3">
       <div className="min-w-0 flex-1"><h3 className="text-sm font-medium">{stage.provider} · {t(roundKeys[stage.round])}</h3>
         <p className="mt-1 whitespace-pre-wrap break-words text-sm text-muted-foreground">{stage.error?.trim() || t('research.stopUnknown')}</p>

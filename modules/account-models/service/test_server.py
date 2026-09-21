@@ -138,12 +138,15 @@ class BridgeTests(unittest.TestCase):
         self.assertIn('declined', str(error.exception))
 
     def test_gemini_missing_text_profile_cannot_fall_back_to_general_agent(self):
-        available = subprocess.CompletedProcess([], 0, stdout='other-agent\n', stderr='')
-        with patch.object(server.subprocess, 'run', return_value=available), patch.object(server.subprocess, 'Popen') as process:
+        with patch.object(server.JOBS, 'spawn') as spawn:
+            probe = spawn.return_value
+            probe.communicate.return_value = ('other-agent\n', '')
+            probe.returncode = 0
+            probe.args = ['agy', 'agents']
             with self.assertRaises(server.BridgeError) as error:
                 server.run_cli('gemini-account', 'test')
         self.assertEqual(error.exception.status, 503)
-        process.assert_not_called()
+        self.assertEqual(spawn.call_count, 1)  # profile inspection only, no research
 
     def test_research_profile_raises_effort_without_enabling_tools(self):
         normal = server.command_for('chatgpt-account')
