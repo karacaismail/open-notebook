@@ -30,6 +30,12 @@ class Catalog:
     def __init__(self, state:Path, config:dict):
         self.state=state;state.mkdir(parents=True,exist_ok=True,mode=0o700);state.chmod(0o700)
         self.root=Path(config['root']).resolve();self.excludes=[Path(p).absolute() for p in config['exclude']]+[state.resolve()]
+        # Build output, dependency trees and caches repeat at every depth, so they
+        # cannot be expressed as absolute prefixes. They are matched by name.
+        self.exclude_names=set(config.get('exclude_names',[]))
+        # Hidden directories hold tool state, not documents, and their names are
+        # open-ended, so they are matched by their leading dot rather than listed.
+        self.skip_hidden=bool(config.get('exclude_hidden_directories',False))
         self.active=lambda:True
         self.max_bytes=config.get('max_content_bytes',20*1024*1024)
         self.config=config;self.lock=threading.RLock();self.scan_lock=threading.Lock();self.progress={'phase':'starting','visited':0,'unreadable_directories':0,'last_scan':None,'error':None}
@@ -61,6 +67,14 @@ class Catalog:
     def allowed(self,path):
         try:
             lexical=Path(os.path.abspath(path));real=lexical.resolve(strict=False)
+            if self.exclude_names and (self.exclude_names.intersection(lexical.parts) or self.exclude_names.intersection(real.parts)):
+                return False
+            if self.skip_hidden:
+                root_parts=len(self.root.parts)
+                if any(part.startswith('.') for part in lexical.parts[root_parts:-1] if part not in ('.','..')):
+                    return False
+                if lexical.is_dir() and lexical.name.startswith('.') and len(lexical.parts)>root_parts:
+                    return False
             return lexical.is_relative_to(self.root) and real.is_relative_to(self.root) and not any(lexical.is_relative_to(p) or real.is_relative_to(p.resolve()) for p in self.excludes)
         except (OSError,ValueError,RuntimeError):return False
 
@@ -221,7 +235,7 @@ class Catalog:
             counts={r[0]:r[1] for r in db.execute('SELECT status,count(*) FROM files GROUP BY status')}
             vectors=db.execute('SELECT count(*) FROM chunks WHERE vector IS NOT NULL').fetchone()[0]
             passages=db.execute('SELECT count(*) FROM chunks').fetchone()[0]
-        return dict(self.progress,root=str(self.root),excluded=[str(p) for p in self.excludes],files=sum(counts.values()),counts=counts,passages=passages,vectors=vectors,semantic_error=self.vector_error,embedding_model=self.config['embedding_model'],directory_symlinks='canonical_targets_only',max_content_bytes=self.max_bytes)
+        return dict(self.progress,root=str(self.root),excluded=[str(p) for p in self.excludes],excluded_names=sorted(self.exclude_names),hidden_directories='excluded' if self.skip_hidden else 'included',files=sum(counts.values()),counts=counts,passages=passages,vectors=vectors,semantic_error=self.vector_error,embedding_model=self.config['embedding_model'],directory_symlinks='canonical_targets_only',max_content_bytes=self.max_bytes)
 
     def search(self,query,limit=20):
         start=time.monotonic();terms,formats=query_terms(query);warnings=[];rankings=[];bodies={}
