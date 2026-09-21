@@ -25,9 +25,18 @@ from open_notebook.utils.text_utils import extract_text_content
 ASK_MAX_TOKENS = 8192
 
 
+CITATION = re.compile(r"\[((?:source|source_insight|note):[^\]\s]+)\]")
+
+
 def validate_citations(text, allowed):
-    cited = set(re.findall(r"\[((?:source|source_insight|note):[^\]\s]+)\]", text))
-    if cited - set(allowed):
+    """Reject an answer that cites a document outside the retrieved evidence.
+
+    Record ids can arrive as record objects rather than strings, so both sides
+    are compared in their text form.
+    """
+    cited = CITATION.findall(text)
+    allowed = {str(item) for item in allowed}
+    if set(cited) - allowed:
         raise ExternalServiceError("The answer model cited a document outside the retrieved evidence. Please retry or change the answer model.")
 
 
@@ -163,10 +172,12 @@ async def provide_answer(state: SubGraphState, config: RunnableConfig) -> dict:
         ai_content = clean_thinking_content(extract_text_content(ai_message.content))
         if not ai_content.strip():
             # Nothing left after stripping thinking content — an empty partial
-            # answer only pollutes the final synthesis.
-            return {"answers": []}
-        if SearchAdapter.enabled():
-            validate_citations(ai_content, ids)
+            # answer only pollutes the final synthesis. Retrieval diagnostics are
+            # still reported, exactly as on the no-results path.
+            return {"answers": [], "retrieval": [diagnostic] if diagnostic else []}
+        # Scope enforcement belongs to the answer, not to the retrieval backend:
+        # turning the hybrid module off must not turn citation checking off.
+        validate_citations(ai_content, ids)
         return {"answers": [ai_content], "retrieval": [diagnostic] if diagnostic else []}
     except OpenNotebookError:
         raise
@@ -187,9 +198,8 @@ async def write_final_answer(state: ThreadState, config: RunnableConfig) -> dict
         ai_message = await model.ainvoke(system_prompt)
         final_content = extract_text_content(ai_message.content)
         final_content = clean_thinking_content(final_content)
-        if SearchAdapter.enabled():
-            allowed = re.findall(r"\[((?:source|source_insight|note):[^\]\s]+)\]", "\n".join(state.get("answers", [])))
-            validate_citations(final_content, allowed)
+        # The synthesis may only reuse what a validated partial answer already cited.
+        validate_citations(final_content, CITATION.findall("\n".join(state.get("answers", []))))
         return {"final_answer": final_content}
     except OpenNotebookError:
         raise
