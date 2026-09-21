@@ -262,5 +262,13 @@
   {
     "target": "frontend/src/lib/providers.tsx",
     "sha256_before": "c2575ae8b9b7a6d16a6bb4b377757e861e29bcdc8264a830ff292355f64d186d"
+  },
+  {
+    "target": "frontend/src/components/settings/DefaultModelSelectors.tsx",
+    "sha256_before": "079f769b14069b611d9730f8704d1e5241c2c7508a5b9ecb94147226804728e3"
+  },
+  {
+    "target": "frontend/src/components/settings/DefaultModelSelectors.test.tsx",
+    "sha256_before": null
   }
 ]

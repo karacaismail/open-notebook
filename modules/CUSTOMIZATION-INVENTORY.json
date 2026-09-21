@@ -918,6 +918,18 @@
       "module_file": "modules/local-processing/cpu-constraints.txt",
       "sha256": "84382723cccf7410420a49910b9958c94892f7aeb32c55dc2823bbce576374c6",
       "disposition": "module source"
+    },
+    {
+      "source": "frontend/src/components/settings/DefaultModelSelectors.tsx",
+      "module_file": "modules/local-workspace/overlay/frontend/src/components/settings/DefaultModelSelectors.tsx",
+      "sha256": "e2c78488100f7ed18a8dd4a398455bcca019ebdcb0633a7aad4aef44e12639e7",
+      "disposition": "module overlay"
+    },
+    {
+      "source": "frontend/src/components/settings/DefaultModelSelectors.test.tsx",
+      "module_file": "modules/local-workspace/overlay/frontend/src/components/settings/DefaultModelSelectors.test.tsx",
+      "sha256": "aa6be5ee9cc3c157f851f70072810bc5916e33258d42f69f5c5052fd5213c444",
+      "disposition": "module overlay"
     }
   ],
   "excluded": [

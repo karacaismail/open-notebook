@@ -88,6 +88,11 @@ credentials and voice reference recordings are not included in the repository.
 
 The new features received UX and visual-design improvements:
 
+- Redesign default model assignments with readable model/provider selections,
+  purpose-specific cards, an accessible advanced disclosure, clear optional-field
+  actions, automatic-save feedback and preserved embedding-change confirmation.
+  The Models page uses the responsive settings shell; feedback is localized in
+  all fourteen languages. Visual styling belongs to `local-workspace`.
 - Replace the oversized research question with a compact document card that opens
   a styled Markdown modal.
 - Improve action visibility with distinct toolbar placement, icons, clear labels,
