@@ -25,6 +25,7 @@ from store import Store
 from workflow import digest, prompt_for, ready
 from evidence_protocol import VERSION, register, audit_appendix
 from token_budget import TokenBudget
+from packet_markdown import evidence_body
 
 ROOT=Path(os.environ.get('RESEARCH_ROOT', Path(__file__).resolve().parent))
 os.environ.setdefault('TIKTOKEN_CACHE_DIR',str(ROOT/'tiktoken-cache'))
@@ -149,6 +150,14 @@ async def context_plan(run_id:str):return await ENGINE.context_plan(run_id)
 @app.get('/runs/{run_id}/stages/{stage_id}/packet')
 async def packet(run_id:str,stage_id:str):return await ENGINE.packet(run_id,stage_id)
 
+@app.get('/runs/{run_id}/stages/{stage_id}/evidence')
+async def common_evidence(run_id:str,stage_id:str):
+    value=await ENGINE.packet(run_id,stage_id)
+    body,fmt=evidence_body(value['prompt'])
+    name='evidence-'+value['evidence_packet']['sha256'][:12]+('.md' if fmt=='markdown' else '.json')
+    return Response(body,media_type='text/markdown' if fmt=='markdown' else 'application/json',
+                    headers={'Content-Disposition':'attachment; filename="'+name+'"'})
+
 @app.post('/runs/{run_id}/stages/{stage_id}/import')
 async def import_report(run_id:str,stage_id:str,text:str=Form(''),origin_url:str=Form(''),
                         packet_sha:str=Form(...),file:UploadFile|None=File(None),
@@ -190,13 +199,20 @@ async def action(run_id:str,action:str):
 @app.get('/runs/{run_id}/export')
 async def export(run_id:str):
     run=await ENGINE.get(run_id);stream=io.BytesIO()
+    shared_files=set()
     with zipfile.ZipFile(stream,'w',zipfile.ZIP_DEFLATED) as archive:
         archive.writestr('research.json',json.dumps(run,ensure_ascii=False,indent=2))
         archive.writestr('question.md','# '+run['question']+'\n\n'+run['scope'])
         if run.get('prompt_version',1)>=VERSION:
             archive.writestr('evidence-register.json',json.dumps(register(run['stages']),ensure_ascii=False,indent=2))
         for stage in run['stages']:
-            if ready(run,stage):archive.writestr(stage['id']+'/input-packet.md',ENGINE.input_prompt(run,stage))
+            if ready(run,stage):
+                prompt=ENGINE.input_prompt(run,stage)
+                archive.writestr(stage['id']+'/input-packet.md',prompt)
+                body,fmt=evidence_body(prompt)
+                name=f'round-{stage["round"]}/evidence-{digest(body)[:12]}.'+('md' if fmt=='markdown' else 'json')
+                if name not in shared_files:
+                    archive.writestr(name,body);shared_files.add(name)
             if stage['report']:
                 archive.writestr(stage['id']+'/report.md',stage['report']['content'])
                 if stage.get('evidence_audit'):

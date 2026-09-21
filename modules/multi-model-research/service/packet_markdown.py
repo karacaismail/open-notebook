@@ -8,6 +8,28 @@ FORMAT = 'markdown-v2'
 CLAIM_FIELDS = ('id','statement','status','reason','counter_evidence','limits','sources','counter_sources')
 
 
+def evidence_body(prompt):
+    """Extract the exact common data file from a saved or freshly rendered input.
+
+    Task instructions/claim-ID namespaces are separate from the evidence. Do not
+    reconstruct historical data from today's records or normalize its bytes.
+    """
+    marker = re.search(r'^BEGIN_(REFERENCE_[a-f0-9]{64}_*)\n', prompt, re.M)
+    if marker and prompt.endswith('END_' + marker[1] + '\n'):
+        return prompt[marker.start():], 'markdown'
+    if prompt.endswith('\n```\n') and '\n```json\n' in prompt:
+        body = prompt.rsplit('\n```json\n', 1)[1][:-5]
+        value = json.loads(body)
+        if isinstance(value,dict) and all(k in value for k in ('question','scope','reports')):
+            return body, 'json'
+    raise ValueError('Ortak kanıt paketi gönderim metninden güvenle ayrılamadı.')
+
+
+def evidence_identity(prompt):
+    body, fmt = evidence_body(prompt)
+    return {'sha256': hashlib.sha256(body.encode()).hexdigest(), 'bytes': len(body.encode()), 'format': fmt}
+
+
 def ledger_blocks(text):
     """Walk fenced blocks, never treat another block's closing fence as an opener.
 

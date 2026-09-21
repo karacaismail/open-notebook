@@ -1,9 +1,22 @@
 'use client'
 
-import { AlertTriangle, Gauge } from 'lucide-react'
+import { AlertTriangle, Gauge, Files, Download } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/lib/hooks/use-translation'
 import { useContextPlan } from '@/modules/multi-model-research/hooks'
 import { ContextPlanRow, ResearchPacket, ResearchRun } from '@/modules/multi-model-research/api'
+
+export function SharedEvidencePacket({packet,onDownload}:{packet:ResearchPacket;onDownload:()=>void}) {
+  const {t}=useTranslation()
+  const shared=packet.evidence_packet
+  if(!shared)return null
+  return <div className="mb-5 rounded-xl border bg-muted/20 p-4">
+    <p className="flex items-center gap-2 text-sm font-medium"><Files aria-hidden className="size-4 shrink-0"/>{t('research.sharedPacket')}</p>
+    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t('research.sharedPacketHelp')}</p>
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2"><span className="text-xs text-muted-foreground">{t('research.sharedPacketBytes',{bytes:shared.bytes.toLocaleString()})}</span><Button size="sm" variant="outline" onClick={onDownload}><Download aria-hidden className="mr-2 size-3.5"/>{t('research.sharedPacketDownload')}</Button></div>
+    <details className="mt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">{t('research.sharedPacketHash')}</summary><code className="mt-2 block break-all">{shared.sha256}</code></details>
+  </div>
+}
 
 export function PacketBudget({packet}:{packet:ResearchPacket}) {
   const {t}=useTranslation()

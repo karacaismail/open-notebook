@@ -7,7 +7,7 @@ import { ResearchQuestionCard } from './ResearchQuestionCard'
 import { ResearchWorkflow } from './ResearchWorkflow'
 import { ResearchAttentionSummary, ResearchStopFeedback } from './ResearchStopFeedback'
 import { ResearchPolicyPanel } from './ResearchPolicyPanel'
-import { ContextBudgetRows, PacketBudget } from './ResearchContextBudget'
+import { ContextBudgetRows, PacketBudget, SharedEvidencePacket } from './ResearchContextBudget'
 
 vi.mock('@/lib/hooks/use-translation', () => ({ useTranslation: () => ({ language: 'en-US', t: (key: string, values: Record<string, unknown> = {}) => {
   const value = key === 'common.close' ? 'Close' : researchEn[key.replace('research.', '') as keyof typeof researchEn] || key
@@ -176,5 +176,18 @@ describe('Evidence rules',()=>{
     render(<><ResearchStopFeedback stage={stage}/><ResearchRetryPanel run={makeRun(stage)} stage={stage} onRetry={vi.fn()}/></>)
     expect(screen.queryByRole('timer')).not.toBeInTheDocument()
     expect(screen.getByText('Review needed before continuing')).toBeInTheDocument()
+  })
+})
+
+
+describe('Common evidence file',()=>{
+  it('shows one data hash separately from provider budgets and downloads only on request',()=>{
+    const download=vi.fn()
+    render(<SharedEvidencePacket packet={{prompt:'task',sha256:'task-hash',estimated_tokens:217397,automatic_input_limit:240000,report_count:5,evidence_packet:{sha256:'f'.repeat(64),bytes:408761,format:'markdown'}}} onDownload={download}/> )
+    expect(screen.getByText('Same round, same evidence file')).toBeInTheDocument()
+    expect(screen.getByText(/data is not shortened for either model/)).toBeInTheDocument()
+    expect(download).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button',{name:'Download common evidence'}))
+    expect(download).toHaveBeenCalledOnce()
   })
 })

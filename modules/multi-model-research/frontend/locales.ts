@@ -1,4 +1,10 @@
 export const researchEn = {
+  sharedPacket: 'Same round, same evidence file',
+  sharedPacketHelp: 'ChatGPT and Claude receive the same complete evidence. Only task instructions and claim-ID namespaces are separate. Provider token counts and capacity budgets can differ; the data is not shortened for either model.',
+  sharedPacketBytes: '{{bytes}} UTF-8 bytes',
+  sharedPacketDownload: 'Download common evidence',
+  sharedPacketHash: 'Evidence file SHA-256',
+
   policyTitle: 'Evidence and submission checks',
   policyChecked: '{{count}} rules checked',
   policyBlocked: 'Submission blocked',
@@ -89,6 +95,12 @@ export const researchEn = {
   autoRetrySchedule: 'A stalled stage retries itself after 1, 5, 30, 90 and 250 minutes.',
 }
 export const researchTr: typeof researchEn = {
+  sharedPacket: 'Aynı tur, aynı kanıt dosyası',
+  sharedPacketHelp: 'ChatGPT ve Claude aynı tam kanıt dosyasını alır. Görev talimatları ve iddia kimliği önekleri ayrı tutulur. Sağlayıcıların token sayımı ve kapasite bütçesi farklı olabilir; veri modele göre kısaltılmaz.',
+  sharedPacketBytes: '{{bytes}} UTF-8 bayt',
+  sharedPacketDownload: 'Ortak kanıt dosyasını indir',
+  sharedPacketHash: 'Kanıt dosyasının SHA-256 kimliği',
+
   policyTitle: 'Kanıt ve gönderim kontrolleri',
   policyChecked: '{{count}} kural kontrol edildi',
   policyBlocked: 'Gönderim engellendi',

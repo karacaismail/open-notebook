@@ -9,7 +9,7 @@ from browser_runtime import BrowserAttention
 from datetime import datetime, timedelta, timezone
 from workflow import ATTENTION, AUTO_RETRY, RETRY_BACKOFF, SYSTEM, ancestors, citations, digest, initial_stages, now, prompt_for, ready, refresh_status, report_packet
 from evidence_protocol import VERSION, audit_report, audit_appendix
-from packet_markdown import FORMAT
+from packet_markdown import FORMAT, evidence_identity
 from token_budget import MARKDOWN_TRANSPORT
 from research_rules import ResearchRules
 
@@ -153,11 +153,29 @@ class Engine:
         if not ready(run,stage):raise ServiceError('Önceki tur tamamlanmadan bu paketi oluşturamazsınız.',409)
         prompt=self.input_prompt(run,stage)
         budget=await asyncio.to_thread(self.measure_input,prompt,stage)
+        identity=self.evidence_id(prompt)
         # Historical exports are not new submission candidates. Recorded policy
         # remains on the stage; do not display a new blocking decision on completed work.
         policy={} if stage['status']=='completed' else {'policy':await asyncio.to_thread(self.check_packet,run,stage,budget)}
-        return {'prompt':prompt,'sha256':digest(prompt),**budget,**policy,
+        if policy:self.check_shared(run,stage,policy['policy'],identity)
+        return {'prompt':prompt,'sha256':digest(prompt),'evidence_packet':identity,**budget,**policy,
                 'report_count':len(ancestors(run,stage))}
+
+    @staticmethod
+    def evidence_id(prompt):
+        try:return evidence_identity(prompt)
+        except ValueError as exc:raise ServiceError(str(exc),409,kind='integrity_error') from exc
+
+    @staticmethod
+    def check_shared(run,stage,policy,identity):
+        peers=[s for s in run['stages'] if s['round']==stage['round'] and s['id']!=stage['id'] and s.get('evidence_packet')]
+        mismatches=[s['id'] for s in peers if s['evidence_packet']!=identity]
+        policy['rules_evaluated']+=1
+        if mismatches:
+            policy.update(blocked=True,block_status='integrity_error')
+            policy['findings'].append({'id':'ECA-018','action':'block_submission','severity':'error',
+                'message':'Aynı turdaki modellere verilen ortak kanıt dosyası eşleşmiyor. Farklı veriyle gönderim durduruldu.',
+                'evidence':{'different_packet_stages':mismatches}})
 
     def check_packet(self,run,stage,budget,event='packet_prepared'):
         if stage['attempts']:
@@ -311,7 +329,9 @@ class Engine:
                 # auto_synthesize pauses the synthesis rounds only. A web research stage that
                 # is already ready is part of the single-question flow, not an optional extra.
                 if stage['mode']=='account' and not run['auto_synthesize']:continue
-                try:prompt=self.input_prompt(run,stage)
+                try:
+                    prompt=self.input_prompt(run,stage)
+                    identity=self.evidence_id(prompt)
                 except ServiceError as exc:
                     policy={'version':'research-eca-v1','event':'before_submit','rules_evaluated':1,
                         'blocked':True,'block_status':'integrity_error','factual_verification':False,
@@ -324,6 +344,8 @@ class Engine:
                 stage['estimated_input_tokens']=count
                 stage['input_budget']=measured
                 policy=await asyncio.to_thread(self.check_packet,run,stage,measured,'before_submit')
+                self.check_shared(run,stage,policy,identity)
+                stage['evidence_packet']=identity
                 self.record_policy(stage,policy,digest(prompt))
                 if policy['blocked']:
                     reasons=' '.join(f['message'] for f in policy['findings'] if f['action']=='block_submission')

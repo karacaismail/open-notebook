@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from packet_markdown import ledger_blocks, ledger_claims, compact_claims, expand_claims
+from packet_markdown import ledger_blocks, ledger_claims, compact_claims, expand_claims, evidence_body, evidence_identity
 from research_rules import ResearchRules
 from token_budget import TokenBudget, MARKDOWN_TRANSPORT
 from workflow import report_packet, digest, prompt_for
@@ -108,6 +108,61 @@ def test_provider_limits_do_not_raise_chatgpt_and_require_bound_calibration():
     assert e.measure_input('text',{'provider':'Claude'})['automatic_input_limit']==240000
     with pytest.raises(ValueError,match='calibration'):
         Engine(None,None,None,len,180000,budget=TokenBudget(len),input_limits={'Claude':240000})
+
+
+@pytest.mark.parametrize('fmt',['json-v1','markdown-v1','markdown-v2'])
+def test_models_in_the_same_round_receive_identical_evidence_bytes(fmt):
+    r=run()
+    for i in range(5):finish(r,i,[claim(ident=r['stages'][i]['id']+':C001')])
+    for round_ in (2,3):
+        stages=[s for s in r['stages'] if s['round']==round_]
+        prompts=[prompt_for(r,s,packet_format=fmt) for s in stages]
+        assert prompts[0]!=prompts[1]  # claim namespaces are task instructions
+        assert evidence_body(prompts[0])==evidence_body(prompts[1])
+        assert evidence_identity(prompts[0])==evidence_identity(prompts[1])
+        body,format_name=evidence_body(prompts[0])
+        if format_name=='json':assert json.loads(body)==report_packet(r,stages[0])
+
+
+@pytest.mark.asyncio
+async def test_mismatched_peer_evidence_is_blocked_in_preview_and_submission(engine):
+    r=await create(engine,False)
+    for s in r['stages'][:5]:await add(engine,r['id'],s['id'])
+    await settle(engine)
+    r=await engine.get(r['id'])
+    r['stages'][5].update(status='waiting_input',evidence_packet={'sha256':'different','bytes':1,'format':'markdown'})
+    r['auto_synthesize']=True
+    await engine.store.save(r)
+    preview=await engine.packet(r['id'],'synthesis_claude')
+    assert preview['policy']['blocked']
+    assert preview['policy']['findings'][-1]['id']=='ECA-018'
+    await engine.kick(r['id']);await settle(engine)
+    s=(await engine.get(r['id']))['stages'][6]
+    assert s['status']=='integrity_error' and not s['next_retry_at']
+    assert not engine.provider.calls
+
+
+@pytest.mark.asyncio
+async def test_shared_packet_download_is_exact_and_exported_once_per_round(engine,monkeypatch):
+    import server,io,zipfile
+    monkeypatch.setattr(server,'ENGINE',engine)
+    r=await create(engine,False)
+    for s in r['stages'][:5]:await add(engine,r['id'],s['id'])
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app),base_url='http://test',
+                                  headers={'Authorization':'Bearer '+server.KEY}) as client:
+        bodies=[]
+        for sid in ('synthesis_chatgpt','synthesis_claude'):
+            packet=(await client.get(f'/runs/{r["id"]}/stages/{sid}/packet')).json()
+            response=await client.get(f'/runs/{r["id"]}/stages/{sid}/evidence')
+            assert response.status_code==200
+            assert digest(response.content)==packet['evidence_packet']['sha256']
+            assert len(response.content)==packet['evidence_packet']['bytes']
+            bodies.append(response.content)
+        assert bodies[0]==bodies[1]
+        response=await client.get(f'/runs/{r["id"]}/export')
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            files=[name for name in archive.namelist() if name.startswith('round-3/evidence-')]
+            assert len(files)==1 and archive.read(files[0])==bodies[0]
 
 
 def test_reference_roundtrip_after_mermaid_preserves_rejection_history():

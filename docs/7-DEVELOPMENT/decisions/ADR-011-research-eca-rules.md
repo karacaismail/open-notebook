@@ -36,6 +36,7 @@ A reference is legal only when inverse expansion restores the original complete 
 | ECA-015 | Provider preflight; CLI/model/effort/instructions fingerprint changed or unavailable | `calibration_required`, no provider POST or auto-retry |
 | ECA-016 | Before submission; report hash, saved input hash or required saved input fails | `integrity_error`; preserve original files, do not rebuild a different sent request |
 | ECA-017 | Historical saved packet predates rules | Verify saved input hash, label historical audit unavailable; do not pretend a current reconstructed packet was the sent packet |
+| ECA-018 | Same-round provider payload identities differ | Block with integrity_error before submission; compare exact data-file SHA-256, bytes and format |
 
 Retry, idempotency and uncertain browser-submission safeguards remain in their existing owners. The rules do not grant permission to repeat uncertain submissions or bypass provider verification. Account response truncation is rejected by the bridge. These are not new ECA implementations and are not counted as additional rules here.
 
@@ -54,3 +55,9 @@ Example configuration remains portable and uncalibrated. Local calibration finge
 Semantic near-duplicates, copied sources behind different URLs, freshness of source publication dates, fabricated citations, numerical/unit conflicts and source entailment cannot be reliably decided from string equality. Preserve and flag them for model/human review; do not build automatic destructive filters for them. A future canonical-source graph needs fetched evidence and explicit provenance, not aggressive URL normalization. Semantic checks should produce additional assessments, never overwrite original claims. No extra LLM review round, summary, truncation, alternate transport or multi-pass decision is introduced by this change.
 
 All guards run again at actual submission. Forecasts after round two remain estimates because reports not yet written have unknown length. A finite rule catalog cannot guarantee that every possible failure has been anticipated.
+
+## One evidence standard, separate provider accounting
+
+An input consists of task instructions (including the stage's claim-ID namespace) plus a common evidence file. Models in the same round must receive byte-identical evidence. `evidence_body` extracts the actual data bytes from the rendered/saved prompt; it never substitutes a current reconstruction for a historical sent input. `/packet` exposes its SHA-256, UTF-8 byte count and format; `/evidence` downloads those exact bytes. The archive stores a single shared file per round/hash. UI shows this common identity separately from provider token/capacity numbers. ECA-018 compares peer identities at preview and launch. Provider budgets never authorize dropping, reordering or summarizing evidence.
+
+Historical verification: 4ab4eb02 synthesis inputs contain identical 511563-byte JSON evidence, SHA-256 f3ec7badec1ef9f2da5d5d807647d4593ad1524ec154026618fc5237fd87fcbb; 6ea006dc synthesis inputs share 294481-byte JSON evidence. New Markdown representations are also byte-identical across same-round models. JSON/Markdown transport presentation can evolve between versions; historical sent inputs remain pinned.
