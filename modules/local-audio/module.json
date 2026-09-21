@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "id": "local-audio",
+  "name": "Local transcription",
+  "description": "MLX Whisper transcription and macOS speech fallback.",
+  "version": "0.1.0",
+  "author": "karacaismail",
+  "activation": "external",
+  "dependencies": []
+}

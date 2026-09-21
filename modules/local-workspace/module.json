@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "id": "local-workspace",
+  "name": "Local workspace design",
+  "description": "Optional local interface, theme and compatibility customizations.",
+  "version": "0.1.0",
+  "author": "karacaismail",
+  "activation": "build",
+  "dependencies": []
+}

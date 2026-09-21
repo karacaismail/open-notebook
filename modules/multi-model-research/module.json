@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "id": "multi-model-research",
+  "name": "Multi-model research",
+  "description": "Eight-stage evidence-preserving research with browser reports and account synthesis.",
+  "version": "0.1.0",
+  "author": "karacaismail",
+  "activation": "runtime",
+  "dependencies": [
+    "account-models"
+  ],
+  "frontend": {
+    "entry": "page.tsx",
+    "route": "/research",
+    "label_key": "research.title",
+    "section": "process",
+    "icon": "telescope"
+  },
+  "service": {
+    "url_env": "LOCAL_RESEARCH_URL",
+    "key_env": "LOCAL_RESEARCH_KEY",
+    "health_path": "health",
+    "busy_fields": [
+      "active_synthesis",
+      "pending_exports"
+    ],
+    "pending_path": "runs",
+    "proxy_alias": "research"
+  }
+}

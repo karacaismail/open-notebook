@@ -1,0 +1,14 @@
+[
+  {
+    "target": "open_notebook/graphs/source.py",
+    "sha256_before": "bf9cf6e75a6d9aaae1cfa53082d0d3e221ee47c62bbeefacadd40c78770d2588"
+  },
+  {
+    "target": "open_notebook/ai/provision.py",
+    "sha256_before": "c5cb37eb4cdbe031ee2be2bdb640cb1c6df158a82da68b479b66254acd926826"
+  },
+  {
+    "target": "open_notebook/podcasts/models.py",
+    "sha256_before": "4f2390bc9029e7b1ab51b09ea08bb2603e3fada1f45a3190dfa857889926566b"
+  }
+]

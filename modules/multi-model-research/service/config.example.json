@@ -1,0 +1,6 @@
+{
+  "bridge_key_path": "../account-models/.bridge-key",
+  "max_input_tokens": 180000,
+  "browser_transport": "extension",
+  "account_timeout_seconds": 3900
+}

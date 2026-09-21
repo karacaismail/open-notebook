@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "id": "natural-voice",
+  "name": "Natural local voices",
+  "description": "VoxCPM2 speech with operator-supplied synthetic references.",
+  "version": "0.1.0",
+  "author": "karacaismail",
+  "activation": "external",
+  "dependencies": []
+}
