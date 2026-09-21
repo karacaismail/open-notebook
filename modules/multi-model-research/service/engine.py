@@ -153,8 +153,10 @@ class Engine:
         if not ready(run,stage):raise ServiceError('Önceki tur tamamlanmadan bu paketi oluşturamazsınız.',409)
         prompt=self.input_prompt(run,stage)
         budget=await asyncio.to_thread(self.measure_input,prompt,stage)
-        policy=await asyncio.to_thread(self.check_packet,run,stage,budget)
-        return {'prompt':prompt,'sha256':digest(prompt),**budget,'policy':policy,
+        # Historical exports are not new submission candidates. Recorded policy
+        # remains on the stage; do not display a new blocking decision on completed work.
+        policy={} if stage['status']=='completed' else {'policy':await asyncio.to_thread(self.check_packet,run,stage,budget)}
+        return {'prompt':prompt,'sha256':digest(prompt),**budget,**policy,
                 'report_count':len(ancestors(run,stage))}
 
     def check_packet(self,run,stage,budget,event='packet_prepared'):

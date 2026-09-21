@@ -148,6 +148,17 @@ async def test_rules_are_recorded_and_overflow_never_retries(engine):
 
 
 @pytest.mark.asyncio
+async def test_completed_export_does_not_appear_newly_blocked_by_current_rules(engine):
+    r=await create(engine,False)
+    assert 'policy' in await engine.packet(r['id'],'research_gemini')
+    await add(engine,r['id'],'research_gemini')
+    engine.token_limit=1
+    packet=await engine.packet(r['id'],'research_gemini')
+    assert 'policy' not in packet
+    assert (await engine.get(r['id']))['stages'][0]['status']=='completed'
+
+
+@pytest.mark.asyncio
 async def test_calibration_failure_is_recorded_and_never_automatically_retried(engine):
     async def mismatch(stage,prompt):
         policy=ResearchRules.provider_check('a'*64,'b'*64)
