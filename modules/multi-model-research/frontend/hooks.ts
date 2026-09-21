@@ -35,5 +35,6 @@ export function useResearchActions() {
   const upload=useMutation({mutationFn:({id,stage,data}:{id:string;stage:string;data:FormData})=>researchApi.import(id,stage,data),retry:false,onSuccess:run=>{success(run);toast.success(t('research.imported'))},onError:error})
   const action=useMutation({mutationFn:({id,action,expectedState}:{id:string;expectedState?:ControlSnapshot;action:'pause'|'resume'|'sync'|'automate'|'stop'|'cancel'|'restore'})=>researchApi.action(id,action,expectedState),retry:false,onSuccess:success,onError:error})
   const retry=useMutation({mutationFn:({id,stage,expectedState}:{id:string;stage:string;expectedState?:ControlSnapshot})=>researchApi.retryStage(id,stage,expectedState),retry:false,onSuccess:run=>{success(run);toast.success(t('research.retryStarted'))},onError:error})
-  return {create,upload,action,retry,error}
+  const stageAction=useMutation({mutationFn:({id,stage,action,expectedState}:{id:string;stage:string;action:'pause'|'stop'|'cancel'|'resume'|'restore'|'retry';expectedState:ControlSnapshot})=>researchApi.stageAction(id,stage,action,expectedState),retry:false,onSuccess:success,onError:error})
+  return {create,upload,action,retry,stageAction,error}
 }

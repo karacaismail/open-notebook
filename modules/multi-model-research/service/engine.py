@@ -12,6 +12,7 @@ from evidence_protocol import VERSION, audit_report, audit_appendix
 from packet_markdown import FORMAT, evidence_identity
 from token_budget import MARKDOWN_TRANSPORT
 from research_rules import ResearchRules
+from stage_controls import StageControls
 
 class ServiceError(Exception):
     def __init__(self,message,status=400,kind=None,policy=None):
@@ -103,7 +104,7 @@ class NotebookSink:
         value=await self.request('POST','notes',{'title':title,'content':content,'note_type':'ai','notebook_id':run['notebook_id']})
         return value['id']
 
-class Engine:
+class Engine(StageControls):
     def __init__(self,store,provider,sink,token_counter,token_limit=90000,browser=None,budget=None,input_limits=None):
         self.store=store;self.provider=provider;self.sink=sink;self.browser=browser
         self.token_counter=token_counter;self.token_limit=token_limit
@@ -122,10 +123,13 @@ class Engine:
         self.retry_task=None
         self.control_tasks={}
     async def recover(self):
-        resume=[];stops=[]
+        resume=[];stops=[];stage_stops=[]
         async with self.lock:
             for run in await self.store.all():
                 for s in run['stages']:
+                    if s.get('control_state'):
+                        if s['control_state']=='stopping':stage_stops.append((run['id'],s['id'],s.get('control_target','stopped')))
+                        continue
                     # Adopt the lossless format only for never-submitted account stages.
                     # Sent packets, completed imports and browser submission journals stay pinned.
                     if s['mode']=='account' and not s['attempts'] and s['status'] not in ('completed','running','submission_uncertain'):
@@ -140,6 +144,7 @@ class Engine:
                 refresh_status(run);await self.store.save(run)
                 if run.get('execution_mode')=='browser' and not run['paused']:resume.append(run['id'])
         for run_id,target in stops:self.start_stop(run_id,target)
+        for rid,sid,target in stage_stops:self.start_stage_stop(rid,sid,target)
         for run_id in resume:await self.kick(run_id)
         if self.retry_task is None:self.retry_task=asyncio.create_task(self.retry_loop())
         # Browser jobs reconcile their durable submission journal; account calls never auto-repeat.
@@ -304,7 +309,7 @@ class Engine:
             if stage['status']=='completed':
                 if stage['report']['sha256']==report_hash:return run
                 raise ServiceError('Bu aşamada zaten bir rapor var. Tamamlanmış raporlar değiştirilmez; yeni bir araştırma oluşturun.',409)
-            if stage['status']=='running':raise ServiceError('Çalışan sentez tamamlanmadan rapor içe aktarılamaz.',409)
+            if stage['status']=='running' or stage.get('control_state') in ('stopping','stop_failed','cancelled'):raise ServiceError('Önce bu aşamanın durdurma durumunu çözün veya aşamayı geri yükleyin.',409)
             if not ready(run,stage):raise ServiceError('Önceki turdaki bütün raporlar gerekli.',409)
             expected=digest(self.input_prompt(run,stage))
             if packet_sha!=expected:raise ServiceError('Rapor paketi güncel değil. Güncel paketi yeniden açın.',409)
@@ -315,7 +320,7 @@ class Engine:
                 target=folder/filename;target.write_bytes(raw);target.chmod(0o600)
                 stored.append({'name':Path(name).name,'file':filename,'sha256':digest(raw),'bytes':len(raw)})
             combined=text+'\n'+'\n'.join(e['content'] for e in evidence)
-            stage.update(status='completed',error=None,finished_at=now(),input_sha256=expected,
+            stage.update(status='completed',control_state=None,control_error=None,next_retry_at=None,error=None,finished_at=now(),input_sha256=expected,
                 report={'content':text,'evidence':evidence,'sha256':report_hash,'citations':citations(combined),
                         'origin_url':origin_url,'provenance':'web_deep_research_import' if stage['mode'] in ('import','browser') else 'manual_synthesis_import',
                         'original_files':stored,'researched_at':researched_at})
@@ -343,12 +348,13 @@ class Engine:
                 async with self.lock:
                     run=await self.get(run_id);run['sync_error']='Not defterine aktarım tamamlanamadı. Raporlar korunuyor; aktarımı tekrar deneyin.';await self.store.save(run)
             return await self.get(run_id)
-    async def kick(self,run_id):
+    async def kick(self,run_id,only=None):
         async with self.lock:
             run=await self.get(run_id)
             if run['paused'] or run.get('control_state'):return
             launches=[]
             for stage in run['stages']:
+                if stage.get('control_state') or (only and stage['id']!=only):continue
                 if stage['mode'] not in ('account','browser') or stage['status']!='ready':continue
                 # auto_synthesize pauses the synthesis rounds only. A web research stage that
                 # is already ready is part of the single-question flow, not an optional extra.
@@ -393,7 +399,7 @@ class Engine:
             async with self.provider_locks[stage['provider']]:
                 async with self.lock:
                     latest=await self.get(run_id)
-                    if latest['paused'] or latest.get('control_state'):
+                    if latest['paused'] or latest.get('control_state') or self.stage(latest,stage_id).get('control_state'):
                         queued=self.stage(latest,stage_id)
                         queued.update(status='ready',started_at=None,attempts=max(0,queued['attempts']-1))
                         refresh_status(latest);await self.store.save(latest)
@@ -407,13 +413,13 @@ class Engine:
                     async with self.lock:
                         latest=await self.get(run_id)
                         current=self.stage(latest,stage_id)
-                        if latest.get('control_state'):return
+                        if latest.get('control_state') or current.get('control_state'):return
                         current['request_dispatched']=True
                         await self.store.save(latest)
                     text,usage=await self.provider.synthesize(stage,prompt)
             async with self.lock:
                 run=await self.get(run_id);stage=self.stage(run,stage_id)
-                stage.update(status='completed',finished_at=now(),usage=usage,error=None,
+                stage.update(status='completed',control_state=None,control_error=None,finished_at=now(),usage=usage,error=None,
                     retry_index=0,next_retry_at=None,
                     report={'content':text,'sha256':digest(json.dumps({'content':text,'evidence':[]},ensure_ascii=False,sort_keys=True)),
                             'evidence':[],'citations':citations(text),'origin_url':browser_report['url'] if browser_report else '',
@@ -428,7 +434,7 @@ class Engine:
             async with self.lock:
                 run=await self.get(run_id);stage=self.stage(run,stage_id)
                 resumable=stage['mode']=='browser' and self.browser is not None and self.browser.can_resume(run_id,stage_id)
-                if run.get('control_state'):
+                if run.get('control_state') or stage.get('control_state'):
                     stage.update(status='interrupted',error='Kullanıcı işlemi durdurdu. Tamamlanmış raporlar korundu.',next_retry_at=None)
                     refresh_status(run);await self.store.save(run)
                     raise
@@ -440,7 +446,7 @@ class Engine:
                 run=await self.get(run_id);stage=self.stage(run,stage_id)
                 stage.update(status=(exc.kind or 'failed') if isinstance(exc,(BrowserAttention,ServiceError)) else 'failed',error=str(exc) if isinstance(exc,(ServiceError,BrowserAttention)) else 'Aşama tamamlanamadı. Bağlantıyı kontrol edip devam edin.',finished_at=now())
                 if isinstance(exc,ServiceError) and exc.policy:self.record_policy(stage,exc.policy,stage.get('input_sha256'))
-                if not run.get('control_state'):self.arm_retry(stage)
+                if not run.get('control_state') and not stage.get('control_state'):self.arm_retry(stage)
                 else:stage['next_retry_at']=None
                 refresh_status(run);await self.store.save(run)
         finally:self.tasks.pop((run_id,stage_id),None)
@@ -485,7 +491,7 @@ class Engine:
                 if run['paused'] or run.get('control_state'):continue
                 changed=False
                 for stage in run['stages']:
-                    if self.retry_due(stage):
+                    if not stage.get('control_state') and self.retry_due(stage):
                         stage.update(status='ready',error=None,next_retry_at=None);changed=True
                 if changed:
                     refresh_status(run);await self.store.save(run);due.append(run['id'])
@@ -501,27 +507,15 @@ class Engine:
     @staticmethod
     def control_snapshot(run):
         return {'status':run['status'],'paused':run['paused'],'control_state':run.get('control_state'),
-                'stages':[[s['id'],s['status'],s['attempts']] for s in run['stages']]}
+                'stages':[[s['id'],s['status'],s['attempts'],s.get('control_state')] for s in run['stages']]}
 
-    def check_control_snapshot(self,run,expected):
-        if expected is not None and expected!=self.control_snapshot(run):
+    def check_control_snapshot(self,run,expected,stage_id=None):
+        actual=self.stage_snapshot(run,self.stage(run,stage_id)) if expected and expected.get('scope')=='stage' and stage_id else self.control_snapshot(run)
+        if expected is not None and expected!=actual:
             raise ServiceError('Araştırmanın durumu değişti. Güncel etkileri inceleyip yeniden onaylayın.',409)
 
     async def retry_stage(self,run_id,stage_id,expected_state=None):
-        """User-triggered retry of one stalled stage. Resets the backoff schedule."""
-        async with self.lock:
-            run=await self.get(run_id);stage=self.stage(run,stage_id)
-            self.check_control_snapshot(run,expected_state)
-            if run.get('control_state'):raise ServiceError('Önce araştırma kontrollerinden devam edin; durdurulmuş araştırma tek aşama düğmesiyle başlatılamaz.',409)
-            if stage['status']=='running':raise ServiceError('Bu aşama zaten çalışıyor.',409)
-            if stage['status'] not in ATTENTION:raise ServiceError('Bu aşama tekrar denemeye uygun değil.',409)
-            if stage['mode'] not in ('account','browser'):raise ServiceError('Elle içe aktarılan aşama tekrar denenmez.',409)
-            stage.update(status='ready',error=None,retry_index=0,next_retry_at=None)
-            run['paused']=False
-            if stage['mode']=='account':run['auto_synthesize']=True
-            refresh_status(run);await self.store.save(run)
-        await self.kick(run_id)
-        return await self.get(run_id)
+        return await self.stage_action(run_id,stage_id,'retry',expected_state)
 
     def start_stop(self,run_id,target):
         if run_id in self.control_tasks:return
@@ -582,7 +576,7 @@ class Engine:
                 if any(s['status']=='running' for s in run['stages']):raise ServiceError('Çalışan aşamalar bitmeden yeniden başlatılamaz.',409)
                 run.update(paused=False,auto_synthesize=True,control_state=None,control_error=None)
                 for stage in run['stages']:
-                    if stage['mode'] in ('account','browser') and stage['status'] in ATTENTION:
+                    if not stage.get('control_state') and stage['mode'] in ('account','browser') and stage['status'] in ATTENTION:
                         stage.update(status='ready',error=None,retry_index=0,next_retry_at=None)
             else:raise ServiceError('Bilinmeyen işlem.')
             refresh_status(run);await self.store.save(run)

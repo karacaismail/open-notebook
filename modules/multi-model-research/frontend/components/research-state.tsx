@@ -18,7 +18,7 @@ export function hasRunningStage(run: ResearchRun) {
 }
 
 export function canRetryStage(run: ResearchRun, stage: ResearchStage) {
-  return !run.control_state && stage.mode !== 'import' && attentionStates.includes(stage.status) && !hasRunningStage(run)
+  return !run.control_state && !run.paused && !stage.control_state && stage.mode !== 'import' && attentionStates.includes(stage.status)
 }
 
 export function ResearchStatus({ value }: { value: string }) {

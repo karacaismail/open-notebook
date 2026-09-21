@@ -6,25 +6,9 @@ from __future__ import annotations
 import hashlib, json, os, re, sqlite3, stat, threading, time, unicodedata
 from pathlib import Path
 
-TEXT_EXT = set('txt md markdown rst csv tsv json jsonl yaml yml toml xml html htm css scss js jsx ts tsx py rs go java c h cpp sql sh zsh fish swift kt rb r tex log'.split())
-DOC_EXT = TEXT_EXT | {'pdf','docx'}
-GROUPS = [('strateji','strategy','strategic'),('belge','dokuman','dokume','document','documentation'),('rapor','report'),('plan','roadmap','yolharita'),('mimari','architecture'),('butce','budget'),('sozlesme','contract','agreement'),('toplanti','meeting'),('fatura','invoice'),('arastirma','research'),('finans','finance','financial'),('pazarlama','marketing'),('guvenlik','security')]
-STOP = set('ben benim bana bir ve veya ile icin nasil hangi nerede nerde nereden bul bulur bulabilir dosya dosyam dosyalar file files my where is the a of do you can find please dokuman document belgeler'.split())
-
-def normalized(text):
-    text=text.lower().replace('ı','i').replace('İ','i')
-    return ''.join(c for c in unicodedata.normalize('NFKD',text) if not unicodedata.combining(c))
-
-def query_terms(query):
-    words=re.findall(r'[a-z0-9]+',normalized(query))[:40]
-    formats=[w for w in words if w in DOC_EXT|{'pptx','xlsx','png','jpg','mp4','mp3','zip'}]
-    terms=[]
-    for word in words:
-        if word in STOP or word in formats:continue
-        group=next((g for g in GROUPS if any(word.startswith(x) for x in g)),None)
-        if group and group[0]=='belge':continue
-        terms.extend(group or [word])
-    return list(dict.fromkeys(terms)),list(dict.fromkeys(formats))
+from query import TEXT_EXT, DOC_EXT, OFFICE_EXT, IMAGE_EXT, normalized, query_terms
+from collections import OrderedDict
+EXTRACTION_VERSION = 'documents-ocr-v2'
 
 class Catalog:
     def __init__(self, state:Path, config:dict):
@@ -40,8 +24,9 @@ class Catalog:
         # and for files that are lockfiles or build output rather than documents.
         self.exclude_patterns=list(config.get('exclude_name_patterns',[]))
         self.exclude_files=list(config.get('exclude_file_patterns',[]))
+        self.resolved_excludes=[p.resolve() for p in self.excludes];self.exclusions_checked=time.monotonic()
         self.active=lambda:True
-        self.max_bytes=config.get('max_content_bytes',20*1024*1024)
+        self.max_bytes=config.get('max_content_bytes',256*1024*1024)
         self.config=config;self.lock=threading.RLock();self.scan_lock=threading.Lock();self.progress={'phase':'starting','visited':0,'unreadable_directories':0,'last_scan':None,'error':None}
         with self.db() as db:
             db.executescript('''
@@ -61,9 +46,13 @@ class Catalog:
             db.execute("CREATE INDEX IF NOT EXISTS file_priority_v2 ON files(priority,(CASE WHEN extension IN ('pdf','docx','md','markdown') THEN 0 ELSE 1 END),id) WHERE status='pending'")
         with self.db() as db:
             db.execute("CREATE INDEX IF NOT EXISTS file_priority_v3 ON files(priority,mtime DESC,id) WHERE status='pending'")
+            db.execute('CREATE INDEX IF NOT EXISTS chunk_vector_pending ON chunks(id) WHERE vector IS NULL')
         os.chmod(state/'catalog.sqlite3',0o600)
         self.extract_turn=0
-        self.vector=None;self.vector_lock=threading.Lock();self.vector_error=None
+        self.vector=None;self.vector_lock=threading.RLock();self.vector_error=None
+        self.vector_scopes=OrderedDict();self.embedding_cache=OrderedDict();self.rerank_cache=OrderedDict();self.cache_lock=threading.Lock()
+        self.gc_cursor=0;self.gc_removed=0
+        self._upgrade_extraction()
 
     def db(self):
         db=sqlite3.connect(self.state/'catalog.sqlite3',timeout=30);db.row_factory=sqlite3.Row;return db
@@ -71,6 +60,8 @@ class Catalog:
     def allowed(self,path):
         try:
             lexical=Path(os.path.abspath(path));real=lexical.resolve(strict=False)
+            if time.monotonic()-self.exclusions_checked>1:
+                self.resolved_excludes=[p.resolve() for p in self.excludes];self.exclusions_checked=time.monotonic()
             if self.exclude_names and (self.exclude_names.intersection(lexical.parts) or self.exclude_names.intersection(real.parts)):
                 return False
             if self.exclude_patterns:
@@ -88,7 +79,7 @@ class Catalog:
                     return False
                 if lexical.is_dir() and lexical.name.startswith('.') and len(lexical.parts)>root_parts:
                     return False
-            return lexical.is_relative_to(self.root) and real.is_relative_to(self.root) and not any(lexical.is_relative_to(p) or real.is_relative_to(p.resolve()) for p in self.excludes)
+            return lexical.is_relative_to(self.root) and real.is_relative_to(self.root) and not any(lexical.is_relative_to(p) for p in self.excludes) and not any(real.is_relative_to(p) for p in self.resolved_excludes)
         except (OSError,ValueError,RuntimeError):return False
 
     def content_status(self,path,size):
@@ -109,6 +100,7 @@ class Catalog:
                 db.execute('UPDATE files SET seen=? WHERE id=?',(seen,old['id']));return
             state=self.content_status(path,st.st_size)
             if old:
+                with self.vector_lock:self.vector_scopes.pop(old['extension'],None)
                 fid=old['id'];db.execute('DELETE FROM names WHERE rowid=?',(fid,))
                 db.execute('UPDATE files SET size=?,mtime=?,seen=?,digest=NULL,status=?,error=NULL WHERE id=?',(st.st_size,st.st_mtime_ns,seen,state,fid))
             else:
@@ -143,8 +135,9 @@ class Catalog:
             if batch:flush()
             with self.lock,self.db() as db:
                 # Inaccessible directories are reported, not misclassified as deletion.
-                for row in db.execute('SELECT id,path FROM files WHERE seen<?',(seen,)).fetchall():
+                for row in db.execute('SELECT id,path,extension FROM files WHERE seen<?',(seen,)).fetchall():
                     if any(row['path']==p or row['path'].startswith(p+os.sep) for p in blocked):continue
+                    with self.vector_lock:self.vector_scopes.pop(row['extension'],None)
                     db.execute('DELETE FROM names WHERE rowid=?',(row['id'],));db.execute('DELETE FROM files WHERE id=?',(row['id'],))
                 self.progress.update(phase='watching',last_scan=time.time())
         except Exception as exc:self.progress.update(phase='error',error=type(exc).__name__)
@@ -159,42 +152,86 @@ class Catalog:
             elif not path.exists():
                 # Escaped LIKE patterns would be unsafe for literal filenames; use range.
                 prefix=str(path)+os.sep
-                rows=db.execute('SELECT id FROM files WHERE path=? OR (path>=? AND path<?)',(str(path),prefix,prefix+'\U0010ffff')).fetchall()
+                rows=db.execute('SELECT id,extension FROM files WHERE path=? OR (path>=? AND path<?)',(str(path),prefix,prefix+'\U0010ffff')).fetchall()
                 for row in rows:
+                    with self.vector_lock:self.vector_scopes.pop(row['extension'],None)
                     db.execute('DELETE FROM names WHERE rowid=?',(row['id'],));db.execute('DELETE FROM files WHERE id=?',(row['id'],))
 
-    def read_bytes(self,path):
+    def open_file(self,path):
         if not self.allowed(path):raise ValueError('out_of_scope')
         real=Path(path).resolve(strict=True)
         # O_NOFOLLOW protects the final component; re-check canonical scope before read.
         fd=os.open(real,os.O_RDONLY|os.O_NOFOLLOW)
         try:
             st=os.fstat(fd)
-            if not stat.S_ISREG(st.st_mode) or st.st_size>self.max_bytes:raise ValueError('too_large')
-            with os.fdopen(fd,'rb',closefd=False) as f:data=f.read(self.max_bytes+1)
+            if not stat.S_ISREG(st.st_mode):raise ValueError('not_regular_file')
+            return os.fdopen(fd,'rb')
+        except BaseException:os.close(fd);raise
+
+    def read_bytes(self,path):
+        with self.open_file(path) as f:
+            if os.fstat(f.fileno()).st_size>self.max_bytes:raise ValueError('too_large')
+            data=f.read(self.max_bytes+1)
             if len(data)>self.max_bytes:raise ValueError('too_large')
             return data
-        finally:os.close(fd)
 
     def extract(self,data,ext):
-        if ext in ('pdf','docx'):
-            import subprocess,sys
+        if ext in OFFICE_EXT | IMAGE_EXT:
+            import subprocess,sys,signal
+            proc=subprocess.Popen([sys.executable,str(Path(__file__).with_name('extract_document.py')),ext,str(self.max_bytes)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
             try:
-                result=subprocess.run([sys.executable,str(Path(__file__).with_name('extract_document.py')),ext],input=data,capture_output=True,timeout=30)
-                if result.returncode:raise ValueError('document_parse_failed')
-                return result.stdout.decode('utf-8')
-            except subprocess.TimeoutExpired:raise ValueError('document_parse_timeout')
+                output,error=proc.communicate(data,timeout=self.config.get('document_timeout_seconds',240))
+                if proc.returncode:
+                    reason=error.decode('utf-8',errors='replace').strip()
+                    raise ValueError(reason if reason in ('ocr_unavailable','empty_document','document_limit','document_parse_failed') else 'document_parse_failed')
+                return output.decode('utf-8')
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid,signal.SIGKILL);proc.communicate()
+                raise ValueError('document_parse_timeout')
+        if data.startswith((b'\xff\xfe',b'\xfe\xff')):return data.decode('utf-16')
         if b'\0' in data[:4096]:raise ValueError('binary_content')
-        for enc in ('utf-8-sig','utf-16','cp1254'):
+        for enc in ('utf-8-sig','cp1254'):
             try:return data.decode(enc)
             except UnicodeError:pass
         raise ValueError('unsupported_encoding')
+
+    def _upgrade_extraction(self):
+        # Only reopen previously unsupported/failed content after a parser release.
+        # Successful reports and source bytes are not rewritten.
+        with self.db() as db:
+            db.execute('CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT)')
+            old=db.execute("SELECT value FROM metadata WHERE key='extraction_version'").fetchone()
+            if old and old[0]==EXTRACTION_VERSION:return
+            rows=db.execute("SELECT id,path,size FROM files WHERE status IN ('metadata_only','too_large','unreadable')").fetchall()
+            for row in rows:
+                if self.content_status(Path(row['path']),row['size'])=='pending':
+                    db.execute("UPDATE files SET status='pending',error=NULL WHERE id=?",(row['id'],))
+            db.execute("INSERT OR REPLACE INTO metadata VALUES('extraction_version',?)",(EXTRACTION_VERSION,))
+            db.execute("CREATE INDEX IF NOT EXISTS file_priority_v4 ON files((CASE WHEN extension IN ('pdf','docx','xlsx','pptx') THEN 0 ELSE 1 END),priority,mtime DESC,id) WHERE status='pending'")
+
+    def collect_garbage(self,limit=500):
+        # Cursor-bounded scan: avoid re-scanning all healthy chunks every second.
+        # Shared digests survive while any current file references them.
+        with self.lock,self.db() as db,self.vector_lock:
+            db.execute('BEGIN IMMEDIATE')
+            batch=db.execute('SELECT id FROM chunks WHERE id>? ORDER BY id LIMIT ?',(self.gc_cursor,limit)).fetchall()
+            if not batch:self.gc_cursor=0;return 0
+            end=batch[-1][0]
+            rows=db.execute('SELECT id,digest FROM chunks c WHERE id>? AND id<=? AND NOT EXISTS (SELECT 1 FROM files f WHERE f.digest=c.digest)',(self.gc_cursor,end)).fetchall()
+            for row in rows:
+                db.execute('DELETE FROM contents WHERE rowid=?',(row['id'],))
+                db.execute('DELETE FROM chunks WHERE id=?',(row['id'],))
+                for idx in [self.vector,*self.vector_scopes.values()]:
+                    if idx is not None and row['id'] in idx:idx.remove(row['id'])
+                db.execute('DELETE FROM documents WHERE digest=? AND NOT EXISTS (SELECT 1 FROM chunks WHERE digest=?) AND NOT EXISTS (SELECT 1 FROM files WHERE digest=?)',(row['digest'],row['digest'],row['digest']))
+            self.gc_cursor=end;self.gc_removed+=len(rows)
+            return len(rows)
 
     def process_one(self):
         self.extract_turn+=1
         # New/edited documents get a fast lane; one in eight slots still drains
         # initial coverage, so a busy workspace cannot starve the original backlog.
-        order="id" if self.extract_turn%8==0 else "priority,mtime DESC,id"
+        order="id" if self.extract_turn%8==0 else "(CASE WHEN extension IN ('pdf','docx','xlsx','pptx') THEN 0 ELSE 1 END),priority,mtime DESC,id"
         with self.db() as db:
             row=db.execute("SELECT * FROM files WHERE status='pending' ORDER BY "+order+" LIMIT 1").fetchone()
         if not row:return False
@@ -203,7 +240,7 @@ class Catalog:
             with self.db() as db:known=db.execute('SELECT 1 FROM documents WHERE digest=?',(digest,)).fetchone()
             if not known:
                 text=self.extract(data,row['extension'])
-                if not text.strip():raise ValueError('empty_or_ocr_required')
+                if not text.strip():raise ValueError('empty_document')
                 # Paragraph-like bounded windows with overlap, without truncating document.
                 parts=[text[i:i+1800] for i in range(0,len(text),1600)]
             with self.lock,self.db() as db:
@@ -211,12 +248,15 @@ class Catalog:
                 if current.st_mtime_ns!=row['mtime'] or current.st_size!=row['size']:
                     self.upsert(Path(row['path']),db,time.time_ns());return True
                 if not self.allowed(row['path']):raise ValueError('out_of_scope')
+                if known and not db.execute('SELECT 1 FROM documents WHERE digest=?',(digest,)).fetchone():
+                    return True
                 if not known:
                     db.execute('INSERT OR IGNORE INTO documents VALUES(?,?,?)',(digest,len(text),len(parts)))
                     for i,body in enumerate(parts):
                         cursor=db.execute('INSERT OR IGNORE INTO chunks(digest,position,body) VALUES(?,?,?)',(digest,i,body))
                         if cursor.rowcount:db.execute('INSERT INTO contents(rowid,body) VALUES(?,?)',(cursor.lastrowid,normalized(body)))
                 db.execute("UPDATE files SET digest=?,status='indexed',error=NULL WHERE id=? AND mtime=?",(digest,row['id'],row['mtime']))
+            if known:self.index_digest(digest)
         except Exception as exc:
             with self.db() as db:db.execute("UPDATE files SET status='unreadable',error=? WHERE id=? AND mtime=?",(str(exc)[:160] if isinstance(exc,ValueError) else type(exc).__name__,row['id'],row['mtime']))
         return True
@@ -226,9 +266,9 @@ class Catalog:
         import numpy as np
         idx=Index(ndim=768,metric='cos',dtype='f16')
         with self.db() as db:
-            cursor=db.execute('SELECT id,vector FROM chunks WHERE vector IS NOT NULL')
+            cursor=db.execute('SELECT id,vector FROM chunks c WHERE vector IS NOT NULL AND EXISTS (SELECT 1 FROM files f WHERE f.digest=c.digest)')
             while batch:=cursor.fetchmany(1000):idx.add(np.array([r['id'] for r in batch],dtype=np.uint64),np.stack([np.frombuffer(r['vector'],dtype=np.float32) for r in batch]))
-        with self.vector_lock:self.vector=idx
+        with self.vector_lock:self.vector=idx;self.vector_scopes.clear()
 
     def embed_batch(self):
         import httpx,numpy as np
@@ -239,80 +279,48 @@ class Catalog:
             response.raise_for_status();vectors=np.asarray(response.json()['embeddings'],dtype=np.float32)
         if vectors.shape!=(len(rows),768) or not np.isfinite(vectors).all():raise ValueError('invalid_embeddings')
         with self.lock,self.db() as db,self.vector_lock:
-            for row,vec in zip(rows,vectors):db.execute('UPDATE chunks SET vector=? WHERE id=?',(vec.tobytes(),row['id']))
-            self.vector.add(np.array([r['id'] for r in rows],dtype=np.uint64),vectors)
+            for row,vec in zip(rows,vectors):
+                current=db.execute('SELECT digest FROM chunks WHERE id=?',(row['id'],)).fetchone()
+                if not current or not db.execute('SELECT 1 FROM files WHERE digest=?',(current['digest'],)).fetchone():continue
+                db.execute('UPDATE chunks SET vector=? WHERE id=?',(vec.tobytes(),row['id']))
+                self.add_vector(db,row['id'],current['digest'],vec)
         self.vector_error=None;return True
+
+    def add_vector(self,db,key,digest,vec):
+        if self.vector is not None and key not in self.vector:self.vector.add(key,vec)
+        exts={r[0] for r in db.execute('SELECT DISTINCT extension FROM files WHERE digest=?',(digest,))}
+        for ext,idx in self.vector_scopes.items():
+            if ext in exts and key not in idx:idx.add(key,vec)
+
+    def index_digest(self,digest):
+        import numpy as np
+        with self.lock,self.db() as db,self.vector_lock:
+            for row in db.execute('SELECT id,vector FROM chunks WHERE digest=? AND vector IS NOT NULL',(digest,)):
+                self.add_vector(db,row['id'],digest,np.frombuffer(row['vector'],dtype=np.float32))
+
+    def scoped_vector(self,extension):
+        # A lazily built per-format graph filters BEFORE top-k. Subsequent vector
+        # writes update loaded graphs; bounded LRU keeps unused graphs out of RAM.
+        from usearch.index import Index
+        import numpy as np
+        with self.lock,self.vector_lock:
+            if extension in self.vector_scopes:
+                self.vector_scopes.move_to_end(extension);return self.vector_scopes[extension]
+            idx=Index(ndim=768,metric='cos',dtype='f16')
+            with self.db() as db:
+                cursor=db.execute('SELECT id,vector FROM chunks c WHERE vector IS NOT NULL AND EXISTS (SELECT 1 FROM files f WHERE f.digest=c.digest AND f.extension=?)',(extension,))
+                while batch:=cursor.fetchmany(1000):idx.add(np.array([r['id'] for r in batch],dtype=np.uint64),np.stack([np.frombuffer(r['vector'],dtype=np.float32) for r in batch]))
+            self.vector_scopes[extension]=idx
+            while len(self.vector_scopes)>4:self.vector_scopes.popitem(last=False)
+            return idx
 
     def status(self):
         with self.db() as db:
             counts={r[0]:r[1] for r in db.execute('SELECT status,count(*) FROM files GROUP BY status')}
-            vectors=db.execute('SELECT count(*) FROM chunks WHERE vector IS NOT NULL').fetchone()[0]
             passages=db.execute('SELECT count(*) FROM chunks').fetchone()[0]
-        return dict(self.progress,root=str(self.root),excluded=[str(p) for p in self.excludes],excluded_names=sorted(self.exclude_names),hidden_directories='excluded' if self.skip_hidden else 'included',excluded_patterns=self.exclude_patterns,excluded_files=self.exclude_files,files=sum(counts.values()),counts=counts,passages=passages,vectors=vectors,semantic_error=self.vector_error,embedding_model=self.config['embedding_model'],directory_symlinks='canonical_targets_only',max_content_bytes=self.max_bytes)
+            vectors=passages-db.execute('SELECT count(*) FROM chunks WHERE vector IS NULL').fetchone()[0]
+        return dict(self.progress,root=str(self.root),excluded=[str(p) for p in self.excludes],excluded_names=sorted(self.exclude_names),hidden_directories='excluded' if self.skip_hidden else 'included',excluded_patterns=self.exclude_patterns,excluded_files=self.exclude_files,files=sum(counts.values()),counts=counts,passages=passages,vectors=vectors,semantic_error=self.vector_error,embedding_model=self.config['embedding_model'],directory_symlinks='canonical_targets_only',max_content_bytes=self.max_bytes,vector_pending=passages-vectors,gc_removed=self.gc_removed,content_formats=sorted(DOC_EXT),ocr_available=Path(__file__).with_name('ocr').is_file())
 
     def search(self,query,limit=20):
-        start=time.monotonic();terms,formats=query_terms(query);warnings=[];rankings=[];bodies={}
-        expression=' OR '.join('"'+w+'"*' for w in terms)
-        with self.db() as db:
-            if expression:
-                rankings.append([(r['rowid'],None) for r in db.execute('SELECT rowid FROM names WHERE names MATCH ? ORDER BY bm25(names,8,1) LIMIT 150',(expression,))])
-                chunkrows=db.execute('SELECT rowid FROM contents WHERE contents MATCH ? ORDER BY bm25(contents) LIMIT 100',(expression,)).fetchall()
-            else:chunkrows=[]
-            lexical=[]
-            for r in chunkrows:
-                chunk=db.execute('SELECT digest,body FROM chunks WHERE id=?',(r[0],)).fetchone()
-                for file in db.execute('SELECT id FROM files WHERE digest=? LIMIT 20',(chunk['digest'],)):
-                    lexical.append((file['id'],chunk['body']))
-            rankings.append(lexical)
-            if not terms:
-                sql='SELECT id FROM files';params=[]
-                if formats:sql+=' WHERE extension IN ('+','.join('?' for _ in formats)+')';params=formats
-                rankings.append([(r[0],None) for r in db.execute(sql+' ORDER BY mtime DESC LIMIT 150',params)])
-            try:
-                if self.vector is not None and len(self.vector) and terms:
-                    import httpx,numpy as np
-                    response=httpx.post(self.config.get('ollama_url','http://127.0.0.1:11434')+'/api/embed',json={'model':self.config['embedding_model'],'input':query,'truncate':False},timeout=12);response.raise_for_status()
-                    q=np.asarray(response.json()['embeddings'][0],dtype=np.float32)
-                    with self.vector_lock:matches=list(self.vector.search(q,count=80))
-                    semantic=[]
-                    for match in matches:
-                        chunk=db.execute('SELECT digest,body FROM chunks WHERE id=?',(int(match.key),)).fetchone()
-                        if chunk:
-                            for file in db.execute('SELECT id FROM files WHERE digest=? LIMIT 20',(chunk['digest'],)):semantic.append((file['id'],chunk['body']))
-                    rankings.append(semantic)
-            except Exception:warnings.append('semantic_unavailable')
-            scores={}
-            for li,ranking in enumerate(rankings):
-                seen=set()
-                for i,(fid,body) in enumerate(ranking):
-                    if fid in seen:continue
-                    seen.add(fid);scores[fid]=scores.get(fid,0)+(1.5 if li==0 else 1)/(40+i+1)
-                    if body:bodies.setdefault(fid,body)
-            results=[];groups={}
-            for fid in sorted(scores,key=scores.get,reverse=True):
-                row=db.execute('SELECT * FROM files WHERE id=?',(fid,)).fetchone()
-                if not row or (formats and row['extension'] not in formats) or not self.allowed(row['path']):continue
-                try:
-                    st=Path(row['path']).stat()
-                    if st.st_mtime_ns!=row['mtime'] or st.st_size!=row['size']:continue
-                except OSError:continue
-                key=row['digest'] or row['path']
-                if key in groups:
-                    groups[key]['copies'].append(row['path']);continue
-                item={k:row[k] for k in ('id','path','name','extension','size','mtime','status','error')}
-                item.update(score=round(scores[fid],6),snippet=bodies.get(fid,'')[:1000],copies=[],sha256=row['digest'])
-                groups[key]=item;results.append(item)
-            if results and self.config.get('reranker_url'):
-                try:
-                    import httpx
-                    shortlist=results[:min(32,len(results))]
-                    key=Path(self.config['reranker_key_file']).read_text().strip()
-                    response=httpx.post(self.config['reranker_url']+'/rerank',json={'query':query,'documents':[r['name']+'\n'+r['snippet'] for r in shortlist]},headers={'Authorization':'Bearer '+key},timeout=20)
-                    response.raise_for_status();scores=response.json()['scores']
-                    if len(scores)!=len(shortlist):raise ValueError('invalid_reranker_response')
-                    if max(scores)<.001:warnings.append('weak_relevance')
-                    else:
-                        ordered=sorted(zip(shortlist,scores),key=lambda pair:pair[1],reverse=True)
-                        results=[dict(item,relevance=score) for item,score in ordered]+results[len(shortlist):]
-                except Exception:warnings.append('reranker_unavailable')
-            return {'results':results[:limit],'query_terms':terms,'extensions':formats,'warnings':warnings,'timing_ms':round((time.monotonic()-start)*1000),'partial_index':self.progress['phase'] in ('starting','scanning') or self.status()['counts'].get('pending',0)>0,'retrieval':'filename BM25 + passage BM25 + multilingual HNSW + reciprocal rank fusion'}
+        from retrieval import search
+        return search(self,query,limit)

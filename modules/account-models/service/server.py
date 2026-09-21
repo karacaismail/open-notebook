@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 from cancellation import JOBS, RequestCancelled
+from model_policy import ModelPolicy, SelectionError
 from preliminary import PROFILES, WEB_SYSTEM, command as preliminary_command, trace as preliminary_trace, capabilities as preliminary_capabilities
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -22,6 +23,7 @@ ROOT = Path(os.environ.get('ACCOUNT_BRIDGE_ROOT', Path(__file__).resolve().paren
 CONFIG = json.loads((ROOT / 'config.json').read_text())
 TOKEN = (ROOT / '.bridge-key').read_text().strip()
 MODELS = CONFIG['models']
+MODEL_POLICY = ModelPolicy(CONFIG.get('executables',{}),ROOT/'model-cooldowns.json')
 JOBS.directory = ROOT / 'request-state'
 RUN_DIR = ROOT / 'empty-workspace'
 RUN_DIR.mkdir(exist_ok=True)
@@ -94,8 +96,9 @@ def cli_env(provider):
     return env
 
 
-def command_for(model, profile='default'):
+def command_for(model, profile='default', selection=None):
     spec = MODELS[model]
+    if selection:spec=dict(spec,preliminary_cli_model=selection['model'],preliminary_effort=selection['effort'])
     if profile in PROFILES:
         return preliminary_command(command_for(model, 'research_synthesis'), spec, profile, SYSTEM)
     provider = spec['provider']
@@ -213,7 +216,7 @@ def prepare_prompt(body):
     return json.dumps(task, ensure_ascii=False), function, response_format
 
 
-def run_cli(model, prompt, profile='default'):
+def run_cli(model, prompt, profile='default', selection=None):
     provider = MODELS[model]['provider']
     if provider == 'gemini':
         agent_name = 'notebook-preliminary' if profile == 'preliminary_research' else 'notebook-text'
@@ -232,7 +235,7 @@ def run_cli(model, prompt, profile='default'):
             raise BridgeError('The Gemini text profile could not be checked.', 503)
         if available.returncode or agent_name not in available.stdout.splitlines():
             raise BridgeError('The Gemini text profile is missing. Run Baslat.command to restore it.', 503)
-    proc = JOBS.spawn(command_for(model, profile), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    proc = JOBS.spawn(command_for(model, profile, selection), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, cwd=str(RUN_DIR),
                             env=cli_env(provider), start_new_session=True)
     try:
@@ -309,6 +312,13 @@ def run_cli(model, prompt, profile='default'):
                     usage.update(first_context_tokens=contexts[0],max_context_tokens=max(contexts),context_observations=len(contexts))
     except (ValueError, TypeError, KeyError):
         text = ''
+    if not text and not tool_trace.get('tool_calls') and (proc.returncode or incomplete):
+        failure = (stdout + stderr).lower()
+        if any(x in failure for x in ('rate limit', 'usage limit', 'quota', '429')):
+            MODEL_POLICY.limited(provider)
+            raise BridgeError('The account quota is exhausted. Wait for the reset; no replacement research was sent.',429)
+        if any(x in failure for x in ('model_not_found', 'unknown model', 'model is not available', 'invalid model')):
+            raise BridgeError('The selected model is unavailable for this account.',404)
     if incomplete:
         raise BridgeError('The account response was interrupted or reached its output limit; partial output was not accepted.', 502)
     if proc.returncode != 0 or not text:
@@ -350,8 +360,23 @@ def parse_json_answer(text):
 def completion(body):
     prompt, function, response_format = prepare_prompt(body)
     model = body['model']
+    selected=None
     with JOBS.request(body.get('local_request_id')), QUEUES[model].slot():
-        if body.get('local_profile') in ('research_synthesis', *PROFILES):
+        if body.get('local_profile') in PROFILES:
+            excluded=[]
+            for attempt in range(3):
+                try:selected=MODEL_POLICY.choose(MODELS[model],excluded)
+                except SelectionError as exc:raise BridgeError(str(exc),exc.status) from None
+                selected['unavailable_models']=list(excluded)
+                JOBS.check()
+                try:
+                    text,usage=run_cli(model,prompt,body['local_profile'],selected)
+                    break
+                except BridgeError as exc:
+                    if exc.status==429:MODEL_POLICY.limited(MODELS[model]['provider'])
+                    if exc.status!=404 or attempt==2:raise
+                    excluded.append(selected['model'])
+        elif body.get('local_profile') == 'research_synthesis':
             text, usage = run_cli(model, prompt, body['local_profile'])
         else:
             text, usage = run_cli(model, prompt)
@@ -377,9 +402,9 @@ def completion(body):
             'requested_effort':spec.get('research_effort','high'),
             'model_selection':'explicit CLI request; provider-resolved model not independently attested'}
     if body.get('local_profile') in PROFILES:
-        selected=preliminary_capabilities(MODELS)[model]
+        selected=selected or preliminary_capabilities(MODELS)[model]
         result['execution']={'profile':body['local_profile'],'requested_model':selected['model'],'requested_effort':selected['effort'],
-            'model_selection':'explicit CLI request; see reported_models for provider observations',**usage.pop('research_trace',{})}
+            'model_selection':selected.get('policy','explicit'), 'availability':{k:v for k,v in selected.items() if k not in ('model','effort')},**usage.pop('research_trace',{})}
     return result
 
 
@@ -410,6 +435,7 @@ class Handler(BaseHTTPRequestHandler):
                                  'runtime_fingerprints': {model: runtime_fingerprint(model) for model in MODELS if MODELS[model]['provider'] in ('codex','claude')},
                                  'prompt_formats': ['json-v1','research-markdown-v1'],
                                  'preliminary': preliminary_capabilities(MODELS),
+                                 'model_selection_policy':'ranked-live-account-catalog-v1',
                                  'queues': {name: q.status() for name, q in QUEUES.items()}})
             return
         if not self.authorized():

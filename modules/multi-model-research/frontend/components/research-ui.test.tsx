@@ -104,7 +104,7 @@ describe('Server-backed retry display', () => {
     fireEvent.click(screen.getByRole('button', { name: 'I understand, continue' }))
     expect(onRetry).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('checkbox'))
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Yes, Try again' })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Yes, Try this stage again' })) })
     expect(onRetry).toHaveBeenCalledTimes(1)
     view.rerender(<ResearchRetryPanel run={run} stage={stage} pending onRetry={onRetry} />)
     expect(screen.getByRole('button', { name: 'Try again' })).toBeDisabled()
@@ -115,7 +115,7 @@ describe('Server-backed retry display', () => {
     render(<ResearchRetryPanel run={makeRun(stage, { paused: true, status: 'paused', stages: [stage, sibling] })} stage={stage} onRetry={vi.fn()} />)
     expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
     expect(screen.getByRole('timer')).toHaveTextContent('—:—')
-    expect(screen.getByText('Manual retry is available when the active stages finish.')).toBeInTheDocument()
+    expect(screen.queryByRole('button',{name:'Try again'})).not.toBeInTheDocument()
   })
 
   it('shows the current attempt without a fictional timer while running', () => {

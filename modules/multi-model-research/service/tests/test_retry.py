@@ -148,11 +148,10 @@ async def test_manual_retry_refuses_a_running_or_healthy_stage(engine):
 
 
 @pytest.mark.asyncio
-async def test_manual_retry_clears_a_pause_so_the_button_always_does_something(engine):
+async def test_manual_retry_does_not_resume_the_whole_run(engine):
     run = await failing_run(engine)
     await engine.action(run['id'], 'pause')
-    engine.provider.fail.clear()
     engine.provider.calls.clear()
-    await engine.retry_stage(run['id'], 'synthesis_chatgpt')
-    await settle(engine)
-    assert 'synthesis_chatgpt' in [c[0] for c in engine.provider.calls]
+    with pytest.raises(ServiceError):await engine.retry_stage(run['id'], 'synthesis_chatgpt')
+    assert (await engine.get(run['id']))['paused']
+    assert not engine.provider.calls

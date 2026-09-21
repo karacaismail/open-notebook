@@ -43,6 +43,13 @@ def vector_worker():
         except Exception as exc:catalog.vector_error=type(exc).__name__;worked=False
         stop.wait(.1 if worked else 10)
 
+def cleanup_worker():
+    while not stop.is_set():
+        if enabled.is_set():
+            try:catalog.collect_garbage(20000)
+            except Exception as exc:catalog.progress['error']='Cleanup: '+type(exc).__name__
+        stop.wait(2)
+
 @asynccontextmanager
 async def lifespan(app):
     from watchdog.observers import Observer
@@ -58,7 +65,7 @@ async def lifespan(app):
                 if len(dirty)>10000:dirty.clear();rescan.set()
             if event.is_directory and event.event_type in ('created','deleted','moved') and any(p and catalog.allowed(p) for p in (event.src_path,getattr(event,'dest_path',None))):rescan.set()
     watcher=Observer();watcher.schedule(Changes(),str(catalog.root),recursive=True);watcher.start()
-    threads=[threading.Thread(target=fn,daemon=True) for fn in (scanner,extract_worker,vector_worker)]
+    threads=[threading.Thread(target=fn,daemon=True) for fn in (scanner,extract_worker,vector_worker,cleanup_worker)]
     WORKERS.extend(threads)
     for thread in threads:thread.start()
     yield
@@ -89,6 +96,12 @@ async def search(body:Search):
 def file_info(file_id:int):
     with catalog.db() as db:row=db.execute('SELECT * FROM files WHERE id=?',(file_id,)).fetchone()
     if not row or not catalog.allowed(row['path']):raise HTTPException(404,'File not available')
-    try:data=catalog.read_bytes(row['path'])
+    try:file=catalog.open_file(row['path'])
     except (OSError,ValueError):raise HTTPException(404,'File no longer readable')
-    return Response(data,media_type='application/octet-stream',headers={'Content-Disposition':"attachment; filename*=UTF-8''"+__import__('urllib.parse',fromlist=['quote']).quote(row['name']), 'X-Content-Type-Options':'nosniff'})
+    from fastapi.responses import StreamingResponse
+    from starlette.background import BackgroundTask
+    def chunks():
+        try:
+            while data:=file.read(1024*1024):yield data
+        finally:file.close()
+    return StreamingResponse(chunks(),background=BackgroundTask(file.close),media_type='application/octet-stream',headers={'Content-Disposition':"attachment; filename*=UTF-8''"+__import__('urllib.parse',fromlist=['quote']).quote(row['name']), 'X-Content-Type-Options':'nosniff'})

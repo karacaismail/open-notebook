@@ -72,7 +72,7 @@ async def service_error(request,exc):return JSONResponse({'detail':str(exc)},sta
 @app.get('/health')
 async def health():
     browser=BROWSER.runtime if BROWSER else None
-    return {'status':'healthy' if ENGINE else 'loading','research_controls':'v1','active_synthesis':len(ENGINE.tasks)+len(ENGINE.control_tasks) if ENGINE else 0,
+    return {'status':'healthy' if ENGINE else 'loading','research_controls':'v1','stage_controls':'v1','active_synthesis':len(ENGINE.tasks)+len(ENGINE.control_tasks) if ENGINE else 0,
             'pending_exports':len(ENGINE.background) if ENGINE else 0,
             'mode':'browser_research' if BROWSER else 'web_research_imports',
             'browser_transport':getattr(browser,'transport','playwright') if browser else None,
@@ -201,6 +201,11 @@ class ControlRequest(BaseModel):
 async def retry_stage(run_id:str,stage_id:str,body:ControlRequest | None=None):
     """User-triggered retry of one stalled stage; also resets its backoff schedule."""
     return await ENGINE.retry_stage(run_id,stage_id,body.expected_state if body else None)
+
+@app.post('/runs/{run_id}/stages/{stage_id}/actions/{action}')
+async def stage_action(run_id:str,stage_id:str,action:str,body:ControlRequest):
+    if body.expected_state is None:raise ServiceError('Aşama etkileri güncel durumla onaylanmalıdır.',409)
+    return await ENGINE.stage_action(run_id,stage_id,action,body.expected_state)
 
 @app.post('/runs/{run_id}/{action}')
 async def action(run_id:str,action:str,body:ControlRequest | None=None):

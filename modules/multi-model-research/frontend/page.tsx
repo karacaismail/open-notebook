@@ -19,6 +19,7 @@ import { ResearchQuestionCard, briefPreview } from '@/modules/multi-model-resear
 import { ResearchPolicyPanel } from '@/modules/multi-model-research/components/ResearchPolicyPanel'
 import { PacketBudget, ResearchContextBudget, SharedEvidencePacket } from '@/modules/multi-model-research/components/ResearchContextBudget'
 import { ResearchWorkflow } from '@/modules/multi-model-research/components/ResearchWorkflow'
+import { ResearchStageControls } from '@/modules/multi-model-research/components/ResearchStageControls'
 import { ResearchControls } from '@/modules/multi-model-research/components/ResearchControls'
 import { ResearchRetryPanel } from '@/modules/multi-model-research/components/ResearchRetryPanel'
 import { attentionStates, roundKeys, ResearchStatus as Status } from '@/modules/multi-model-research/components/research-state'
@@ -80,7 +81,7 @@ function StageDetail({run,stage}:{run:ResearchRun;stage:ResearchStage}) {
   const packet=useResearchPacket(run.id,stage.id,stage.status!=='pending')
   const [text,setText]=useState('');const [file,setFile]=useState<File|null>(null);const [evidence,setEvidence]=useState<File[]>([]);const [url,setUrl]=useState('');const [manual,setManual]=useState(false)
   const [researchedAt,setResearchedAt]=useState('')
-  const unlocked=stage.status!=='pending';const canImport=unlocked&&!['running','completed'].includes(stage.status)
+  const unlocked=stage.status!=='pending';const canImport=!['stopping','stop_failed','cancelled'].includes(stage.control_state||'')&&unlocked&&!['running','completed'].includes(stage.status)
   async function submit(event:React.FormEvent) {
     event.preventDefault();if(!packet.data)return
     const data=new FormData();data.append('packet_sha',packet.data.sha256);data.append('origin_url',url);if(researchedAt)data.append('researched_at',researchedAt)
@@ -89,10 +90,11 @@ function StageDetail({run,stage}:{run:ResearchRun;stage:ResearchStage}) {
     try{await upload.mutateAsync({id:run.id,stage:stage.id,data})}catch { /* Mutation errors are displayed by the hook. */ }
   }
   return <section className="min-w-0 rounded-2xl border bg-card p-5 shadow-sm sm:p-6" aria-label={`${stage.provider} ${t(roundKeys[stage.round])}`}>
-    <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">{t(roundKeys[stage.round])}</p><h2 className="text-xl font-semibold">{stage.provider}</h2></div><Status value={stage.status}/></div>
+    <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">{t(roundKeys[stage.round])}</p><h2 className="text-xl font-semibold">{stage.provider}</h2></div><Status value={stage.control_state || stage.status}/></div>
+    <ResearchStageControls run={run} stage={stage}/>
     {!unlocked?<p className="py-8 text-muted-foreground">{t('research.blocked')}</p>:<>
       <ResearchStopFeedback stage={stage}/>
-      <ResearchRetryPanel run={run} stage={stage} pending={retry.isPending} onRetry={expectedState=>retry.mutateAsync({id:run.id,stage:stage.id,expectedState})}/>
+      <ResearchRetryPanel showAction={false} run={run} stage={stage} pending={retry.isPending} onRetry={expectedState=>retry.mutateAsync({id:run.id,stage:stage.id,expectedState})}/>
       {packet.data?.evidence_packet&&<SharedEvidencePacket packet={packet.data} onDownload={async()=>{try{const shared=packet.data!.evidence_packet!;downloadResearchFile(await researchApi.evidence(run.id,stage.id),'evidence-'+shared.sha256.slice(0,12)+(shared.format==='json'?'.json':'.md'))}catch(err){error(err)}}}/>}
       <ResearchPolicyPanel policy={stage.policy ?? packet.data?.policy}/>
       {stage.report?<div className="space-y-5">
@@ -100,13 +102,13 @@ function StageDetail({run,stage}:{run:ResearchRun;stage:ResearchStage}) {
         <div className="max-h-[65vh] overflow-y-auto pr-2"><MarkdownRenderer components={{img:({alt})=><span>{alt}</span>,a:({href,children})=><a href={href} target="_blank" rel="noopener noreferrer">{children}</a>}}>{stage.report.content}</MarkdownRenderer></div>
         <details className="rounded-lg border p-3"><summary className="cursor-pointer text-sm font-medium">{t('research.sources')} ({stage.report.citations.length})</summary><ul className="mt-3 space-y-2 break-all text-xs">{stage.report.citations.map(source=><li key={source}><a href={source} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">{source}</a></li>)}{!stage.report.citations.length&&<li>{t('research.noSources')}</li>}</ul></details>
         {stage.report.evidence.map((item,i)=><details key={i} className="rounded-lg border p-3"><summary className="cursor-pointer text-sm">{item.name}</summary><pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap text-xs">{item.content}</pre></details>)}
-        <div className="space-y-1 text-xs text-muted-foreground"><p>{t('research.reportHash')}: <code className="break-all">{stage.report.sha256}</code></p>{stage.report.original_files.length>0&&<p>{t('research.savedFiles')}: {stage.report.original_files.map(f=>f.name).join(', ')}</p>}{stage.usage&&<p>{t('research.usage')}: {stage.usage.total_tokens??((stage.usage.prompt_tokens||0)+(stage.usage.completion_tokens||0))}</p>}</div>
+        <div className="space-y-1 text-xs text-muted-foreground"><p>{t('research.reportHash')}: <code className="break-all">{stage.report.sha256}</code></p>{stage.report.original_files.length>0&&<p>{t('research.savedFiles')}: {stage.report.original_files.map(f=>f.name).join(', ')}</p>}{stage.usage?.execution&&<p>{t('research.selectedModel')}: {stage.usage.execution.requested_model} · {stage.usage.execution.requested_effort}<br/>{stage.usage.execution.reported_models?.length?t('research.reportedModel')+': '+stage.usage.execution.reported_models.join(', '):t('research.modelUnverified')}</p>}{stage.usage&&<p>{t('research.usage')}: {stage.usage.total_tokens??((stage.usage.prompt_tokens||0)+(stage.usage.completion_tokens||0))}</p>}</div>
         <p className="text-xs text-muted-foreground">{t('research.researchedAt')}: {stage.report.researched_at||t('research.unknownDate')}</p>
         <p className="text-xs text-muted-foreground">{t('research.immutable')}</p>
       </div>:<div className="space-y-5">
-        {stage.mode==='browser'&&stage.browser_progress&&<div className="rounded-lg border bg-muted/40 p-3 text-sm"><p className="flex items-center gap-2">{stage.status==='running'&&<Loader2 className="size-4 animate-spin"/>}{stage.browser_progress.message}</p>{stage.browser_progress.url&&<a href={stage.browser_progress.url} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex items-center text-xs text-blue-500 hover:underline">{t('research.openConversation')}<ArrowUpRight className="ml-1 size-3"/></a>}</div>}
+        {stage.mode==='browser'&&stage.browser_progress&&<div className="rounded-lg border bg-muted/40 p-3 text-sm"><p className="flex items-center gap-2">{stage.status==='running'&&<Loader2 className="size-4 animate-spin"/>}{stage.status==='running'?stage.browser_progress.message:t('research.lastBrowserProgress',{message:stage.browser_progress.message})}</p>{stage.browser_progress.url&&<a href={stage.browser_progress.url} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex items-center text-xs text-blue-500 hover:underline">{t('research.openConversation')}<ArrowUpRight className="ml-1 size-3"/></a>}</div>}
         {stage.mode==='browser'&&attentionStates.includes(stage.status)&&<p role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm">{t('research.attentionNeeded')}</p>}
-        <div className="space-y-3"><h3 className="text-sm font-semibold">{stage.round===0?t('research.round0'):stage.mode==='import'?t('research.step1'):stage.mode==='browser'?t('research.browserBusy'):t('research.accountMode')}</h3><p className="text-sm leading-relaxed text-muted-foreground">{stage.round===0?t('research.preliminaryHelp'):stage.mode==='import'?t('research.step1Help'):stage.mode==='browser'?t('research.browserStageHelp'):t('research.automatic')}</p>
+        <div className="space-y-3"><h3 className="text-sm font-semibold">{stage.round===0?t('research.round0'):stage.mode==='import'?t('research.step1'):stage.mode==='browser'?t('research.browserStageTitle'):t('research.accountMode')}</h3><p className="text-sm leading-relaxed text-muted-foreground">{stage.round===0?t('research.preliminaryHelp'):stage.mode==='import'?t('research.step1Help'):stage.mode==='browser'?t('research.browserStageHelp'):t('research.automatic')}</p>
           <div className="flex flex-wrap gap-2"><Button asChild variant="outline" size="sm"><a href={providerUrls[stage.provider]} target="_blank" rel="noopener noreferrer">{t('research.openProvider',{provider:stage.provider})}<ArrowUpRight className="ml-2 size-4"/></a></Button>
             <Button variant="outline" size="sm" disabled={!packet.data} onClick={async()=>{try{await navigator.clipboard.writeText(packet.data!.prompt);toast.success(t('research.copied'))}catch(err){error(err)}}}><Copy className="mr-2 size-4"/>{t('research.copyPrompt')}</Button>
             <Button variant="outline" size="sm" disabled={!packet.data} onClick={()=>downloadResearchFile(packet.data!.prompt,stage.id+'-input.md')}><Download className="mr-2 size-4"/>{t('research.downloadPacket')}</Button>

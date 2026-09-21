@@ -84,7 +84,10 @@ globalThis.__openNotebookResearchDriver = async function(command) {
     const signIn=controls().some(el=>/^(log in|login|sign in|sign up|giriş yap|oturum aç|kaydol|üye ol)$/i.test(label(el)));
     const notices=[...document.querySelectorAll('h1,h2,[role="alert"],[role="dialog"]')].filter(visible).map(text).join('\n');
     const challenge=/just a moment|verify you are human|security verification|checking your browser|bir dakika/i.test(document.title)||/verify you are human|performing security verification|insan olduğunuzu doğrulayın|güvenlik doğrulaması yapılıyor/i.test(notices);
-    const quota=/usage limit reached|limitine ulaştın|limitinize ulaştınız|research limit|araştırma sınırına|out of research|no research left/i.test(notices);
+    // Quota notices also live inside tool menus/popovers, not just alerts.
+    // Never inspect report bodies: their prose may mention quotas as evidence.
+    const quotaText=notices+'\n'+[...document.querySelectorAll('[role="menu"],[role="tooltip"],[data-radix-popper-content-wrapper]')].filter(visible).map(text).join('\n');
+    const quota=/usage limit reached|limitine ulaştın|limitinize ulaştınız|research limit|araştırma sınırına|out of research|no research left|you(?:’|')ve (?:used|reached).{0,50}(?:research|limit)|0 (?:deep research|research|araştırma).{0,20}(?:remaining|left|kaldı)|araştırma.{0,35}(?:hakkınız kalmadı|kotası doldu|limit.{0,15}ulaşt)/i.test(quotaText);
     const assistant=assistantText();
     const user=[...document.querySelectorAll(spec.user)].filter(visible).map(text).join('\n');
     return {url:location.href,sign_in_visible:signIn,challenge_visible:challenge,quota_visible:quota,
@@ -125,6 +128,7 @@ globalThis.__openNotebookResearchDriver = async function(command) {
         const candidates=[...document.querySelectorAll('[role="menu"] *,[cmdk-item] *,[data-radix-popper-content-wrapper] *,[class*="popover"] *,[class*="dropdown"] *')];
         option=candidates.find(el=>visible(el)&&el.children.length===0&&/^(Deep research|Deep Research|Derin araştırma)$/.test(text(el)));
       }
+      assertReady();
       if(!option)fail('Gerçek araştırma modu bu sayfada bulunamadı. Normal sohbet gönderilmedi.','research_unavailable');
       option.click();await wait(700);
       if(!modeSelected())fail('Araştırma modunun seçimi doğrulanamadı; soru gönderilmedi.');

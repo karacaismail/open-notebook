@@ -2,11 +2,12 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ResearchRun } from '../api'
 import { researchEn } from '../locales'
+import { ResearchStageControls } from './ResearchStageControls'
 import { ResearchControls } from './ResearchControls'
 import { ResearchActionDialog } from './ResearchActionDialog'
 
 const mutation = vi.hoisted(() => ({ mutate: vi.fn(), mutateAsync: vi.fn().mockResolvedValue({}), isPending: false }))
-vi.mock('../hooks', () => ({ useResearchActions: () => ({ action: mutation, error: vi.fn() }) }))
+vi.mock('../hooks', () => ({ useResearchActions: () => ({ action: mutation, stageAction: mutation, error: vi.fn() }) }))
 vi.mock('@/lib/hooks/use-translation', () => ({ useTranslation: () => ({ t: (key: string, params: Record<string, unknown> = {}) => Object.entries(params).reduce((s, [k, v]) => s.replaceAll('{{' + k + '}}', String(v)), researchEn[key.replace('research.', '') as keyof typeof researchEn] || key) }) }))
 const run: ResearchRun = { id: 'test', question: 'Question', scope: '', as_of: '', language: 'English', auto_synthesize: true, execution_mode: 'browser', paused: false, status: 'running', created_at: '', updated_at: '', notebook_id: null, sync_error: null, stages: [
   { id: 'pre_research_claude', provider: 'Claude', round: 0, mode: 'account', status: 'running', attempts: 1, report: null, error: null, usage: null, note_id: null, browser_progress: null, retry_index: 0, next_retry_at: null },
@@ -26,7 +27,7 @@ describe('Research control protection', () => {
     expect(mutation.mutateAsync).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('checkbox'))
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Yes, Stop now' })) })
-    expect(mutation.mutateAsync).toHaveBeenCalledExactlyOnceWith({ id: 'test', action: 'stop', expectedState: {status:'running',paused:false,control_state:null,stages:[['pre_research_claude','running',1]]} })
+    expect(mutation.mutateAsync).toHaveBeenCalledExactlyOnceWith({ id: 'test', action: 'stop', expectedState: {status:'running',paused:false,control_state:null,stages:[['pre_research_claude','running',1,null]]} })
   })
   it('dismisses a review without making any mutation', () => {
     render(<ResearchControls run={run} />)
@@ -67,4 +68,21 @@ describe('Research control protection', () => {
     expect(confirm).toHaveBeenCalledOnce(); expect(button).toBeDisabled()
     await act(async () => resolve())
   })
+})
+
+it('offers target retry while a sibling runs and submits only the selected stage after two steps', async () => {
+  const stage={...run.stages[0],id:'research_chatgpt',provider:'ChatGPT',status:'quota_wait'}
+  const data={...run,stages:[...run.stages,stage]}
+  render(<ResearchStageControls run={data} stage={stage} />)
+  fireEvent.click(screen.getByRole('button',{name:'Try this stage again'}))
+  expect(mutation.mutateAsync).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button',{name:'I understand, continue'}))
+  fireEvent.click(screen.getByRole('checkbox'))
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Yes, Try this stage again'}))})
+  expect(mutation.mutateAsync).toHaveBeenCalledExactlyOnceWith({id:'test',stage:'research_chatgpt',action:'retry',expectedState:{scope:'stage',run_paused:false,run_control_state:null,stage:['research_chatgpt','quota_wait',1,null]}})
+})
+it('keeps resume disabled during a whole-run pause', () => {
+  const stage={...run.stages[0],status:'stopped',control_state:'stopped' as const}
+  render(<ResearchStageControls run={{...run,paused:true,stages:[stage]}} stage={stage} />)
+  expect(screen.getByRole('button',{name:'Resume stage'})).toBeDisabled()
 })

@@ -73,7 +73,7 @@ def ancestors(run, stage):
 
 
 def ready(run, stage):
-    return all(s['status'] == 'completed' for s in ancestors(run,stage))
+    return all(s['status'] == 'completed' and not s.get('control_state') for s in ancestors(run,stage))
 
 
 def citations(text):
@@ -145,7 +145,7 @@ def refresh_status(run):
     elif all(x=='completed' for x in states):run['status']='completed'
     elif run.get('paused'):run['status']='paused'
     elif 'running' in states:run['status']='running'
-    elif any(x in ATTENTION for x in states):run['status']='needs_attention'
+    elif any(x in ATTENTION for x in states) or any(s.get('control_state') for s in run['stages']):run['status']='needs_attention'
     elif 'waiting_input' in states:run['status']='waiting_input'
     else:run['status']='ready'
     run['updated_at']=now()

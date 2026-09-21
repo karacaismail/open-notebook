@@ -225,3 +225,15 @@ def test_block_source_cards_become_valid_separate_markdown_links():
     html='<a href="https://one.example/source"><div>one.example</div><div>First source</div></a><a href="https://two.example/source"><div>Second source</div></a>'
     text=report_markdown(html)
     assert text=='[one.example First source](https://one.example/source)[Second source](https://two.example/source)'
+
+@pytest.mark.asyncio
+async def test_quota_in_tool_menu_is_classified_before_missing_research_control():
+    async with async_playwright() as p:
+        browser=await p.chromium.launch(channel='chrome',headless=True)
+        ctx=await browser.new_context()
+        async def route(r):await r.fulfill(content_type='text/html; charset=utf-8',body='<form><textarea></textarea><button type="button">Tools</button></form><div role="menu">You’ve used all your deep research requests</div>')
+        await ctx.route('**/*',route);page=await ctx.new_page();await page.goto('https://chatgpt.com/')
+        await page.evaluate((PACKAGE/'dom-driver.js').read_text())
+        result=await page.evaluate('()=>__openNotebookResearchDriver({op:"select_research",provider:"ChatGPT",params:{},expires_at:Date.now()/1000+30})')
+        assert result['error']['kind']=='quota_wait'
+        await ctx.close();await browser.close()
