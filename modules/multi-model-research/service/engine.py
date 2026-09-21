@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import copy
 import json
 from pathlib import Path
 import uuid
@@ -8,6 +9,8 @@ from browser_runtime import BrowserAttention
 from datetime import datetime, timedelta, timezone
 from workflow import ATTENTION, AUTO_RETRY, RETRY_BACKOFF, SYSTEM, ancestors, citations, digest, initial_stages, now, prompt_for, ready, refresh_status
 from evidence_protocol import VERSION, audit_report, audit_appendix
+from packet_markdown import FORMAT
+from token_budget import MARKDOWN_TRANSPORT
 
 class ServiceError(Exception):
     def __init__(self,message,status=400):super().__init__(message);self.status=status
@@ -20,9 +23,14 @@ class AccountProvider:
     async def synthesize(self,stage,prompt):
         model={'ChatGPT':'chatgpt-account','Claude':'claude-account'}[stage['provider']]
         async with httpx.AsyncClient(timeout=self.timeout) as client:
+            if stage.get('account_input_format')==MARKDOWN_TRANSPORT:
+                health=await client.get('http://127.0.0.1:8317/health',timeout=10)
+                if health.status_code!=200 or MARKDOWN_TRANSPORT not in health.json().get('prompt_formats',[]):
+                    raise ServiceError('Hesap köprüsü kayıpsız Markdown taşımasını desteklemiyor. Köprüyü güncelleyin; model isteği gönderilmedi.',503)
             response=await client.post('http://127.0.0.1:8317/v1/chat/completions',
                 headers={'Authorization':'Bearer '+self.key_path.read_text().strip()},
                 json={'model':model,'local_profile':'research_synthesis','stream':False,
+                      'local_prompt_format':stage.get('account_input_format','json-v1'),
                       'messages':[{'role':'system','content':SYSTEM},{'role':'user','content':prompt}]})
         if response.status_code!=200:
             messages={401:'Hesap oturumu gerekli.',403:'Sağlayıcı bu sentez isteğini reddetti.',
@@ -72,9 +80,11 @@ class NotebookSink:
         return value['id']
 
 class Engine:
-    def __init__(self,store,provider,sink,token_counter,token_limit=90000,browser=None):
+    def __init__(self,store,provider,sink,token_counter,token_limit=90000,browser=None,budget=None):
         self.store=store;self.provider=provider;self.sink=sink;self.browser=browser
         self.token_counter=token_counter;self.token_limit=token_limit
+        self.budget=budget
+        self.plan_cache={}
         self.lock=asyncio.Lock();self.tasks={};self.sync_locks={}
         self.provider_locks={p:asyncio.Lock() for p in ('ChatGPT','Claude','Gemini')}
         self.background=set()
@@ -84,6 +94,10 @@ class Engine:
         async with self.lock:
             for run in await self.store.all():
                 for s in run['stages']:
+                    # Adopt the lossless format only for never-submitted account stages.
+                    # Sent packets, completed imports and browser submission journals stay pinned.
+                    if s['mode']=='account' and not s['attempts'] and s['status'] not in ('completed','running','submission_uncertain'):
+                        s.update(packet_format=FORMAT,account_input_format=MARKDOWN_TRANSPORT)
                     # A browser job survives both a crash and an orderly shutdown: its journal
                     # is reconciled against the provider before anything is ever re-sent.
                     if s['mode']=='browser' and s['status'] in ('running','interrupted') and self.browser and self.browser.can_resume(run['id'],s['id']):
@@ -112,8 +126,10 @@ class Engine:
                 if old['request_fingerprint']!=fingerprint:raise ServiceError('Aynı istek kimliği farklı bir soru için kullanılamaz.',409)
                 return old
             run={'id':uuid.uuid4().hex,'idempotency_key':key,'request_fingerprint':fingerprint,
-                 **data,'prompt_version':VERSION,'created_at':now(),'updated_at':now(),'paused':False,'status':'waiting_input',
+                 **data,'prompt_version':VERSION,'packet_format':FORMAT,'created_at':now(),'updated_at':now(),'paused':False,'status':'waiting_input',
                  'notebook_id':data.get('notebook_id'),'sync_error':None,'stages':initial_stages(data.get('execution_mode','imports'))}
+            for s in run['stages']:
+                if s['mode']=='account':s['account_input_format']=MARKDOWN_TRANSPORT
             await self.store.save(run)
         if data.get('execution_mode')=='browser':
             await self.kick(run['id'])
@@ -123,14 +139,64 @@ class Engine:
         run=await self.get(run_id);stage=self.stage(run,stage_id)
         if not ready(run,stage):raise ServiceError('Önceki tur tamamlanmadan bu paketi oluşturamazsınız.',409)
         prompt=self.input_prompt(run,stage)
-        return {'prompt':prompt,'sha256':digest(prompt),'estimated_tokens':self.token_counter(prompt),
-                'automatic_input_limit':self.token_limit,'report_count':len(ancestors(run,stage))}
+        budget=await asyncio.to_thread(self.measure_input,prompt,stage)
+        return {'prompt':prompt,'sha256':digest(prompt),**budget,
+                'report_count':len(ancestors(run,stage))}
+
+    def measure_input(self,prompt,stage):
+        if self.budget:
+            return self.budget.measure(prompt,stage['provider'],self.token_limit,SYSTEM,
+                                       stage.get('account_input_format','json-v1'))
+        # Existing integrations that inject an already-adjusted counter remain compatible.
+        count=self.token_counter(prompt)
+        return {'estimated_tokens':count,'automatic_input_limit':self.token_limit}
+
+    async def context_plan(self,run_id):
+        run=await self.get(run_id)
+        if not self.budget:return {'stages':[]}
+        if not all(s['status']=='completed' for s in run['stages'] if s['round']<=2):
+            return {'stages':[]}
+        signature=digest(json.dumps([(s['id'],s['status'],s.get('input_sha256'),s.get('packet_format'),
+                     s.get('account_input_format'),(s.get('report') or {}).get('sha256')) for s in run['stages']]))
+        if (run_id,signature) in self.plan_cache:return self.plan_cache[(run_id,signature)]
+        result=await asyncio.to_thread(self._context_plan,run)
+        if len(self.plan_cache)>=8:self.plan_cache.clear()
+        self.plan_cache[(run_id,signature)]=result
+        return result
+
+    def _context_plan(self,run):
+        rows=[]
+        for stage in run['stages']:
+            if stage['mode']!='account' or stage['status']=='completed':continue
+            missing=[s for s in ancestors(run,stage) if s['status']!='completed']
+            try:
+                if not missing:
+                    prompt=self.input_prompt(run,stage)
+                else:
+                    # A projection only: never submit this incomplete reference packet.
+                    projected=copy.deepcopy(run)
+                    projected['stages']=[s for s in projected['stages'] if s['status']=='completed' or s['id']==stage['id']]
+                    prompt=prompt_for(projected,stage)
+                measured=self.measure_input(prompt,stage)
+                reserve=sum(self.budget.output_tokens_by_round.get(s['round'],32000) for s in missing)
+                estimated=self.budget.from_counts(measured['raw_tokens']+reserve,
+                    measured['transport_raw_tokens']+reserve,stage['provider'],self.token_limit,
+                    stage.get('account_input_format','json-v1')) if missing else measured
+                rows.append({'stage_id':stage['id'],'provider':stage['provider'],'round':stage['round'],
+                    **estimated,'projection':bool(missing),'known_raw_tokens':measured['raw_tokens'],
+                    'missing_reports':len(missing),'reserved_report_tokens':reserve,
+                    'output_tokens_by_round':self.budget.output_tokens_by_round,
+                    'warning':estimated['utilization']>=.85})
+            except (ServiceError,ValueError) as exc:
+                rows.append({'stage_id':stage['id'],'provider':stage['provider'],'round':stage['round'],
+                             'error':str(exc),'warning':True})
+        return {'stages':rows}
     def input_path(self,run,stage):
         return self.store.root/'artifacts'/run['id']/stage['id']/'input-packet.md'
     def input_prompt(self,run,stage):
         path=self.input_path(run,stage)
         if stage['attempts'] and path.is_file():
-            text=path.read_text()
+            text=path.read_bytes().decode('utf-8')
             if digest(text)!=stage['input_sha256']:
                 raise ServiceError('Kaydedilmiş girdi paketi özeti uyuşmuyor; istek yeniden gönderilmedi.',409)
             return text
@@ -203,10 +269,13 @@ class Engine:
                 try:prompt=self.input_prompt(run,stage)
                 except ServiceError as exc:
                     stage.update(status='failed',error=str(exc));continue
-                count=self.token_counter(prompt)
+                measured=await asyncio.to_thread(self.measure_input,prompt,stage)
+                count=measured['estimated_tokens']
                 stage['estimated_input_tokens']=count
+                stage['input_budget']=measured
                 if stage['mode']=='account' and count>self.token_limit:
-                    stage['status']='context_limit';stage['error']='Tam paket otomatik sentezin bağlam sınırını aşıyor. Metin kesilmedi. Paketi indirip sentez sonucunu içe aktarabilirsiniz.';continue
+                    stage.update(status='context_limit',next_retry_at=None,
+                        error=f'Tam paket için sayılan girdi {count:,} token; sınır {self.token_limit:,}. İstek gönderilmedi, metin kesilmedi. Paketi indirip sentez sonucunu içe aktarabilirsiniz.');continue
                 path=self.input_path(run,stage);path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
                 temporary=path.with_suffix('.tmp');temporary.touch(mode=0o600)
                 temporary.write_text(prompt);temporary.replace(path)

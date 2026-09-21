@@ -24,6 +24,7 @@ from importers import MAX_BYTES, MAX_TEXT, extract
 from store import Store
 from workflow import digest, prompt_for, ready
 from evidence_protocol import VERSION, register, audit_appendix
+from token_budget import TokenBudget
 
 ROOT=Path(os.environ.get('RESEARCH_ROOT', Path(__file__).resolve().parent))
 os.environ.setdefault('TIKTOKEN_CACHE_DIR',str(ROOT/'tiktoken-cache'))
@@ -38,7 +39,8 @@ async def lifespan(app):
     global ENGINE,BROWSER
     import tiktoken
     encoding=await asyncio.to_thread(tiktoken.get_encoding,'o200k_base')
-    counter=lambda text:round(len(encoding.encode(text,disallowed_special=()))*1.25)+4096
+    counter=lambda text:len(encoding.encode(text,disallowed_special=()))
+    budget=TokenBudget(counter,CONFIG.get('token_margin'),CONFIG.get('forecast_output_tokens_by_round'))
     store=Store(STATE_ROOT);await store.open()
     # The browser is constructed now but only launched on first use, so starting the
     # service never opens a window by itself.
@@ -48,7 +50,7 @@ async def lifespan(app):
     else:
         runtime=BrowserRuntime(STATE_ROOT.parent)
         BROWSER=BrowserResearch(runtime,STATE_ROOT,timeout=CONFIG.get('browser_timeout_seconds',7200))
-    ENGINE=Engine(store,AccountProvider(Path(CONFIG['bridge_key_path']),CONFIG.get('account_timeout_seconds',3900)),NotebookSink(CONFIG.get('notebook_password','')),counter,CONFIG.get('max_input_tokens',90000),browser=BROWSER)
+    ENGINE=Engine(store,AccountProvider(Path(CONFIG['bridge_key_path']),CONFIG.get('account_timeout_seconds',3900)),NotebookSink(CONFIG.get('notebook_password','')),counter,CONFIG.get('max_input_tokens',90000),browser=BROWSER,budget=budget)
     await ENGINE.recover()
     yield
     await ENGINE.close();await store.close()
@@ -140,6 +142,9 @@ async def create_run(body:RunCreate,idempotency_key:str=Header(alias='Idempotenc
 
 @app.get('/runs/{run_id}')
 async def get_run(run_id:str):return await ENGINE.get(run_id)
+
+@app.get('/runs/{run_id}/context-plan')
+async def context_plan(run_id:str):return await ENGINE.context_plan(run_id)
 
 @app.get('/runs/{run_id}/stages/{stage_id}/packet')
 async def packet(run_id:str,stage_id:str):return await ENGINE.packet(run_id,stage_id)

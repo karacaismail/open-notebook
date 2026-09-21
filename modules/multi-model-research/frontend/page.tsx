@@ -16,6 +16,7 @@ import { useBrowserLogin, useBrowserStatus, useResearchActions, useResearchPacke
 import { downloadResearchFile, ExecutionMode, ResearchRun, ResearchStage } from '@/modules/multi-model-research/api'
 
 import { ResearchQuestionCard, briefPreview } from '@/modules/multi-model-research/components/ResearchQuestionCard'
+import { PacketBudget, ResearchContextBudget } from '@/modules/multi-model-research/components/ResearchContextBudget'
 import { ResearchWorkflow } from '@/modules/multi-model-research/components/ResearchWorkflow'
 import { ResearchControls } from '@/modules/multi-model-research/components/ResearchControls'
 import { ResearchRetryPanel } from '@/modules/multi-model-research/components/ResearchRetryPanel'
@@ -104,6 +105,7 @@ function StageDetail({run,stage}:{run:ResearchRun;stage:ResearchStage}) {
             <Button variant="outline" size="sm" disabled={!packet.data} onClick={()=>downloadResearchFile(packet.data!.prompt,stage.id+'-input.md')}><Download className="mr-2 size-4"/>{t('research.downloadPacket')}</Button>
           </div>
           {packet.data&&<p className="text-xs text-muted-foreground">{t('research.packetInfo',{reports:packet.data.report_count,tokens:packet.data.estimated_tokens.toLocaleString()})}</p>}
+          {packet.data&&stage.mode==='account'&&<PacketBudget packet={packet.data}/>}
           {packet.isError&&<p role="alert" className="text-sm text-destructive">{t('research.error')} <button className="underline" onClick={()=>packet.refetch()}>{t('common.retryConnection')}</button></p>}
           {packet.data&&<details><summary className="cursor-pointer text-xs text-muted-foreground">{t('research.prompt')}</summary><pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-muted p-3 text-xs">{packet.data.prompt}</pre></details>}
         </div>
@@ -129,6 +131,7 @@ function Workspace({run}:{run:ResearchRun}) {
   return <div className="space-y-5">
     <ResearchQuestionCard run={run}/>
     <ResearchControls run={run}/>
+    <ResearchContextBudget run={run} onSelect={setSelected}/>
     <ResearchAttentionSummary run={run} onSelect={setSelected}/>
     <div className="grid items-start gap-5 lg:grid-cols-[minmax(300px,0.7fr)_minmax(0,1.3fr)] xl:grid-cols-[380px_minmax(0,1fr)]">
       <div className="order-2 min-w-0 lg:order-1"><ResearchWorkflow run={run} selected={stage.id} onSelect={setSelected}/></div>

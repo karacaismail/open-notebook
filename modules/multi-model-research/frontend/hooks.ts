@@ -11,6 +11,9 @@ export function useResearchRuns() {
 export function useResearchRun(id:string|null) {
   return useQuery({queryKey:QUERY_KEYS.researchRun(id||''),queryFn:()=>researchApi.get(id!),enabled:!!id,retry:false,refetchInterval:3000})
 }
+export function useContextPlan(id:string,enabled:boolean) {
+  return useQuery({queryKey:[...QUERY_KEYS.researchRun(id),'context-plan'],queryFn:()=>researchApi.contextPlan(id),enabled,retry:false,refetchInterval:5000})
+}
 export function useResearchPacket(id:string,stage:string,enabled:boolean) {
   return useQuery({queryKey:QUERY_KEYS.researchPacket(id,stage),queryFn:()=>researchApi.packet(id,stage),enabled,retry:false,staleTime:Infinity})
 }

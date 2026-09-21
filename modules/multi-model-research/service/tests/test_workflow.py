@@ -163,7 +163,7 @@ async def test_dates_preserve_unknowns_and_research_independence(engine):
     await add(engine,rid,'research_chatgpt');await add(engine,rid,'research_claude')
     prompt=(await engine.packet(rid,'review_chatgpt'))['prompt']
     assert '2026-09-21' in prompt and '2026-08-01' in prompt
-    assert '"researched_at": null' in prompt
+    assert '"researched_at":null' in prompt
     assert 'oy çokluğu' in prompt and 'kanıt tablosu' in prompt
 
 @pytest.mark.asyncio

@@ -54,3 +54,4 @@ What this makes easier, what it makes harder, what to watch. (bullets)
 | [PDR-002](PDR-002-provider-agnostic-core.md) | Provider-agnostic core by default | Accepted |
 
 - [ADR-009: Module contracts and settings](ADR-009-module-contracts-and-settings.md) — module lifecycle, public ports, MVVM and migration boundaries.
+- [ADR-010: Lossless research packets](ADR-010-lossless-research-packets.md) — full evidence, explicit account transport and input-budget forecasts.

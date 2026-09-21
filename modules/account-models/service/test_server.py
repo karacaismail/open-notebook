@@ -8,6 +8,16 @@ import server
 
 
 class BridgeTests(unittest.TestCase):
+    def test_markdown_research_transport_is_verbatim_and_restricted(self):
+        body=self.request(local_profile='research_synthesis',local_prompt_format='research-markdown-v1')
+        body['messages']=[{'role':'system','content':'System instructions'}, {'role':'user','content':'İğüş\r\n```json\n{"a":"\\n"}\n```\t'}]
+        text,fn,fmt=server.prepare_prompt(body)
+        self.assertEqual(text,'System instructions\n\n'+body['messages'][1]['content'])
+        self.assertIsNone(fn);self.assertEqual(fmt,{})
+        for patch in ({'local_profile':'default'}, {'tools':[{'type':'function','function':{'name':'x'}}]}, {'response_format':{'type':'json_object'}}, {'messages':[body['messages'][1]]}):
+            with self.assertRaises(server.BridgeError):server.prepare_prompt(body|patch)
+        with self.assertRaises(server.BridgeError):server.prepare_prompt(body|{'local_prompt_format':'unknown'})
+
     def test_research_records_requested_model_and_effort_without_attesting_resolved_model(self):
         with patch.object(server,'run_cli',return_value=('Report',{'total_tokens':10})):
             result=server.completion(self.request(local_profile='research_synthesis'))

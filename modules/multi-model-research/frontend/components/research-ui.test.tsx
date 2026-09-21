@@ -6,6 +6,7 @@ import { ResearchRetryPanel, retryTiming } from './ResearchRetryPanel'
 import { ResearchQuestionCard } from './ResearchQuestionCard'
 import { ResearchWorkflow } from './ResearchWorkflow'
 import { ResearchAttentionSummary, ResearchStopFeedback } from './ResearchStopFeedback'
+import { ContextBudgetRows, PacketBudget } from './ResearchContextBudget'
 
 vi.mock('@/lib/hooks/use-translation', () => ({ useTranslation: () => ({ language: 'en-US', t: (key: string, values: Record<string, unknown> = {}) => {
   const value = key === 'common.close' ? 'Close' : researchEn[key.replace('research.', '') as keyof typeof researchEn] || key
@@ -21,6 +22,25 @@ function makeRun(stage: ResearchStage, overrides: Partial<ResearchRun> = {}): Re
 }
 
 afterEach(() => { cleanup(); vi.useRealTimers() })
+
+describe('Input budget transparency',()=>{
+  it('labels projections and missing report reserves without triggering an action',()=>{
+    const select=vi.fn()
+    render(<ContextBudgetRows onSelect={select} rows={[{stage_id:'final_chatgpt',provider:'ChatGPT',round:4,warning:true,projection:true,missing_reports:2,reserved_report_tokens:64000,counted_tokens:190000,automatic_input_limit:180000,fits:false}]}/> )
+    expect(screen.getByText('Projection; not an actual input count')).toBeInTheDocument()
+    expect(screen.getByText(/2 missing reports/)).toBeInTheDocument()
+    expect(screen.getByText('Exceeds the estimated input budget')).toBeInTheDocument()
+    expect(select).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button'))
+    expect(select).toHaveBeenCalledWith('final_chatgpt')
+  })
+  it('distinguishes raw tokens, transport and margin instead of claiming exact provider usage',()=>{
+    render(<PacketBudget packet={{prompt:'full',sha256:'hash',report_count:7,estimated_tokens:177746,automatic_input_limit:180000,raw_tokens:150000,transport_raw_tokens:151000,counted_tokens:177746,effective_raw_limit:152960,remaining_input_tokens:2254,token_margin:{multiplier:1.15,overhead_tokens:4096,basis:'local'}}}/> )
+    expect(screen.getByText('Raw packet tokens (o200k_base)')).toBeInTheDocument()
+    expect(screen.getByText('Raw CLI input tokens')).toBeInTheDocument()
+    expect(screen.getByText(/not an exact provider-tokenizer measurement/)).toBeInTheDocument()
+  })
+})
 
 describe('Recorded stop reasons', () => {
   it('shows the exact provider failure instead of inventing a root cause', () => {

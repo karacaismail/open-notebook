@@ -61,3 +61,19 @@ backup provide rollback. Runtime preferences apply on subsequent notebook
 requests; build adapters require a new build, and maintenance tools consume a
 fresh exported policy. No live research or audio generation was started by these
 checks. Existing dependency deprecation warnings are unrelated to this change.
+
+## 2026-09-21 — research context budget
+
+- Lossless Markdown presentation with full report/evidence byte preservation, provenance,
+  reversible claim history and exact URL attribution; canonical archive unchanged.
+- Explicit raw/CLI/count/margin/ceiling fields and round-2 context forecast, with a strict
+  pre-submission guard and no automatic retry for `context_limit`.
+- New transport is opt-in and refuses an older bridge instead of silently re-escaping.
+- Real two-run/six-packet comparison validates all report and attachment bytes and claim
+  register reconstruction. The large final packet remains above the conservative budget:
+  160738 raw / 189089 counted / 180000 limit. Do not claim the 5% headroom criterion passed.
+- Frontend: 196 tests; type check and changed-module ESLint clean; production build passed.
+- Research service: 115 tests covering lossless/budget/forecast/compatibility behavior;
+  account bridge: 16 tests. Operator validation artifact records final counts and hashes.
+- Real Chrome against an isolated frontend/API fixture: forecast and budget disclosure
+  visible, no page errors, no mutation requests, no mobile horizontal overflow.

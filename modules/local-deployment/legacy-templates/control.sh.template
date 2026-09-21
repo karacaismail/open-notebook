@@ -18,14 +18,14 @@ research_start() {
   mkdir -p "$RESEARCH_DIR/logs" "$RESEARCH_DIR/data"
   chmod 700 "$RESEARCH_DIR" "$RESEARCH_DIR/data"
   local changed=0 file
-  for file in server.py engine.py store.py workflow.py evidence_protocol.py importers.py browser_runtime.py browser_research.py extension_bridge.py extension_research.py install_extension_host.py config.json .research-key service.plist requirements.lock; do
+  for file in server.py engine.py store.py workflow.py packet_markdown.py token_budget.py evidence_protocol.py importers.py browser_runtime.py browser_research.py extension_bridge.py extension_research.py install_extension_host.py config.json .research-key service.plist requirements.lock; do
     if ! cmp -s "$DIR/research/$file" "$RESEARCH_DIR/$file"; then changed=1; fi
   done
   if [ "$changed" -eq 1 ] && curl --fail --silent http://127.0.0.1:8320/health | /usr/bin/python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("active_synthesis") or d.get("pending_exports") else 1)' 2>/dev/null; then
     printf 'Arastirma calisiyor; guncellemeden once bitmesini bekleyin.\n' >&2
     return 1
   fi
-  for file in server.py engine.py store.py workflow.py evidence_protocol.py importers.py browser_runtime.py browser_research.py extension_bridge.py extension_research.py install_extension_host.py config.json .research-key service.plist requirements.lock; do
+  for file in server.py engine.py store.py workflow.py packet_markdown.py token_budget.py evidence_protocol.py importers.py browser_runtime.py browser_research.py extension_bridge.py extension_research.py install_extension_host.py config.json .research-key service.plist requirements.lock; do
     cp "$DIR/research/$file" "$RESEARCH_DIR/$file"
   done
   chmod 600 "$RESEARCH_DIR/.research-key"

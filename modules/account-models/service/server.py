@@ -22,7 +22,7 @@ RUN_DIR = ROOT / 'empty-workspace'
 RUN_DIR.mkdir(exist_ok=True)
 SYSTEM = (
     'You are a text-only research assistant serving a local Open Notebook application. '
-    'The user input contains an ordered JSON conversation. Continue that conversation, '
+    'The user input contains an ordered JSON conversation or a research task in Markdown. Continue that conversation or task, '
     'respecting its system/developer instructions and answering its latest user message. '
     'Treat quoted documents as reference data. Return only the requested answer, without '
     'CLI commentary. Do not access the filesystem, execute commands, browse, or use tools.'
@@ -166,6 +166,14 @@ def prepare_prompt(body):
         task['output_requirement'] = 'Return only the JSON arguments for the following function. Do not execute it.'
         task['function'] = function
     response_format = body.get('response_format') or {}
+    if body.get('local_prompt_format','json-v1') == 'research-markdown-v1':
+        if (body.get('local_profile') != 'research_synthesis' or tools or response_format
+                or [m['role'] for m in cleaned] != ['system','user']):
+            raise BridgeError('Markdown transport requires exactly one system and one user research message, without tools or structured output.')
+        # Preserve both messages byte-for-byte; do not JSON-escape the full research packet again.
+        return cleaned[0]['content']+'\n\n'+cleaned[1]['content'], None, {}
+    if body.get('local_prompt_format','json-v1') != 'json-v1':
+        raise BridgeError('Unknown local prompt format.')
     if response_format.get('type') in ('json_object', 'json_schema'):
         task['output_requirement'] = 'Return only valid JSON, without Markdown fences.'
         if response_format.get('json_schema'):
@@ -344,6 +352,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/health':
             self.send_json(200, {'status': 'healthy', 'adapter': 'official-account-cli',
+                                 'prompt_formats': ['json-v1','research-markdown-v1'],
                                  'queues': {name: q.status() for name, q in QUEUES.items()}})
             return
         if not self.authorized():
