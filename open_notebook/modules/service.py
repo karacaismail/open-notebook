@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
@@ -15,6 +16,17 @@ def service_config(item):
         raise ModuleError('This module has no HTTP service', 404)
     base = os.environ.get(spec.url_env, '').rstrip('/')
     key = os.environ.get(spec.key_env, '')
+    # Deployment-owned configuration permits adding a local sidecar without
+    # recreating the application's container/volumes. Never supplied by HTTP.
+    if not base or not key:
+        config = Path(os.environ.get('OPEN_NOTEBOOK_SERVICE_CONFIG', 'data/module-services.json'))
+        try:
+            entry = json.loads(config.read_text()).get(item.id, {}) if config.exists() else {}
+            base = base or entry.get('url', '').rstrip('/')
+            if not key and entry.get('key_file'):
+                key = Path(entry['key_file']).read_text().strip()
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            raise ModuleError('Module service configuration could not be read.', 503) from exc
     url = urlsplit(base)
     if url.scheme not in ('http','https') or not url.hostname or url.username or url.password or url.query or url.fragment or not key:
         raise ModuleError('Module service URL and authentication key must be configured.', 503)
@@ -57,8 +69,19 @@ class ModuleManager:
                 await assert_idle(item)
             if enabled is True and item.service:
                 service_config(item)
+            previous_enabled = module_id in self.registry.enabled()
+            previous_settings = self.registry.settings(module_id)
             await asyncio.to_thread(self.registry.update, module_id, enabled=enabled,
                                     settings=settings, expected_revision=expected_revision)
+            if enabled is not None and item.service and item.service.control_path:
+                try:
+                    base, headers = service_config(item)
+                    async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+                        response = await client.post(base+'/'+item.service.control_path, headers=headers, json={'enabled':enabled})
+                        response.raise_for_status()
+                except (httpx.HTTPError, ModuleError) as exc:
+                    await asyncio.to_thread(self.registry.update, module_id, enabled=previous_enabled, settings=previous_settings)
+                    raise ModuleError('Service did not apply the module state; the previous configuration was restored.',503) from exc
             return self.registry.catalog()
 
     async def request(self, module_id, path, method, query, content, request_headers):

@@ -99,11 +99,15 @@ def prepare(root: Path, output: Path, selected: list[str], configuration: dict |
             continue
         shutil.copytree(module/'frontend',output/'frontend/src/modules'/mid)
         imports.append(f"const Page{number} = dynamic(() => import( '@/modules/{mid}/{spec['entry'].removesuffix('.tsx')}'))")
+        widget = ''
+        if spec.get('search_widget'):
+            imports.append(f"const Widget{number} = dynamic(() => import('@/modules/{mid}/{spec['search_widget'].removesuffix('.tsx')}'))")
+            widget = f'SearchWidget: Widget{number}, '
         if (module/'frontend/locales.ts').exists():
             imports.append(f"import {{ moduleLocales as locales{number} }} from '@/modules/{mid}/locales'")
-            entries.append(f"  '{mid}': {{ Page: Page{number}, locales: locales{number} }},")
+            entries.append(f"  '{mid}': {{ {widget}Page: Page{number}, locales: locales{number} }},")
         else:
-            entries.append(f"  '{mid}': {{ Page: Page{number} }},")
+            entries.append(f"  '{mid}': {{ {widget}Page: Page{number} }},")
         route = spec['route'].strip('/')
         if not route or '..' in Path(route).parts:
             raise ValueError('Invalid frontend route')

@@ -86,6 +86,7 @@ def test_budget_representation_matches_actual_account_bridge(tmp_path,monkeypatc
     monkeypatch.setenv('ACCOUNT_BRIDGE_ROOT',str(tmp_path))
     path=Path(__file__).resolve().parents[3]/'account-models/service/server.py'
     spec=importlib.util.spec_from_file_location('budget_contract_bridge',path)
+    monkeypatch.syspath_prepend(str(path.parent))
     bridge=importlib.util.module_from_spec(spec);spec.loader.exec_module(bridge)
     prompt='İğüş\r\n```json\n{"exact":"\\n"}\n```'
     for fmt in ('json-v1',MARKDOWN_TRANSPORT):

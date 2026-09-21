@@ -36,6 +36,7 @@ class FrontendSpec(BaseModel):
     label_key: str
     section: Literal["collect", "process", "create", "manage"] = "process"
     icon: Literal["telescope", "puzzle"] = "puzzle"
+    search_widget: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_/-]+\.tsx$")
 
 
 class ServiceSpec(BaseModel):
@@ -46,6 +47,7 @@ class ServiceSpec(BaseModel):
     busy_fields: list[str] = []
     pending_path: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_/-]+$")
     proxy_alias: str | None = Field(default=None, pattern=ID)
+    control_path: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_/-]+$")
 
 
 class Manifest(BaseModel):

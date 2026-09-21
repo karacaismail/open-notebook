@@ -1,4 +1,10 @@
 export const researchEn = {
+  requestedModels:'Requested account models', accountStatusError:'Account configuration could not be checked.', modelSelectionHelp:'Uses the strongest configured account options shown here. A quota or login failure pauses its task; no silent downgrade. A requested model is not a provider-confirmed runtime identity.',
+  round0: 'Preliminary research', preliminary: 'Prepare my research brief first', briefMerge: 'ChatGPT · combined brief',
+  preliminaryHelp: 'ChatGPT, Claude and Gemini search and read sources through your account connections. ChatGPT combines their three Markdown reports into a research brief, preserving sources and disagreements. This first phase needs no Chrome window. The following web research phases still use Chrome.',
+  agentPreliminary: 'Searching sources through the account connection',
+  preliminarySequence: 'Preliminary research 3 → 1, then the existing 3 → 2 → 2 → 1 workflow. Original reports remain available.',
+
   sharedPacket: 'Same round, same evidence file',
   sharedPacketHelp: 'ChatGPT and Claude receive the same complete evidence. Only task instructions and claim-ID namespaces are separate. Provider token counts and capacity budgets can differ; the data is not shortened for either model.',
   sharedPacketBytes: '{{bytes}} UTF-8 bytes',
@@ -81,8 +87,8 @@ export const researchEn = {
   manualFallback: 'Import a report manually', created: 'Research workspace created', imported: 'Report imported', copied: 'Full packet copied', error: 'The operation could not be completed.',
   immutable: 'Imported reports are preserved as submitted. Create a new research workspace to change a completed report.',
   reportHash: 'Content fingerprint', web_deep_research_import: 'Imported web research (user supplied)', account_synthesis: 'Generated through account connection', manual_synthesis_import: 'Imported synthesis',
-  automaticMode: 'Run the web research for me', automaticModeHelp: 'The first five tasks use Deep Research / Research in your signed-in Chrome accounts. The extension manages its own task windows; the final three stages use your account connections.',
-  importMode: 'I will run the research myself', importModeHelp: 'Run the first five research tasks in the provider websites yourself and import their full reports here.',
+  automaticMode: 'Run the web research for me', automaticModeHelp: 'The five web research tasks use Deep Research / Research in your signed-in Chrome accounts. The extension manages its own task windows; the final three stages use your account connections.',
+  importMode: 'I will run the research myself', importModeHelp: 'Run the five web research tasks in the provider websites yourself and import their full reports here.',
   connections: 'Chrome extension connection', checkConnections: 'Check connections', deepCheck: 'Also check research-mode access', openLogin: 'Check extension connection',
   connectionHelp: 'In Chrome, open the Open Notebook extension and choose Start local connection. Keep Chrome open. Research windows use the same accounts and do not select tabs in your daily window.',
   connected: 'Page accessible', login_required: 'Sign-in needed', verification_required: 'Security verification needed', quota_wait: 'Quota exhausted', research_unavailable: 'Research mode unavailable', browser_changed: 'Provider interface changed', browser_unavailable: 'Browser unavailable', submission_uncertain: 'Submission unconfirmed',
@@ -95,6 +101,12 @@ export const researchEn = {
   autoRetrySchedule: 'A stalled stage retries itself after 1, 5, 30, 90 and 250 minutes.',
 }
 export const researchTr: typeof researchEn = {
+  requestedModels:'Hesaplardan istenen modeller', accountStatusError:'Hesap yapılandırması denetlenemedi.', modelSelectionHelp:'Yukarıdaki güçlü hesap seçenekleri kullanılır. Kota veya oturum hatasında ilgili görev bekler; model sessizce düşürülmez. İstenen model, sağlayıcının doğruladığı çalışma modeli anlamına gelmez.',
+  round0: 'Ön araştırma', preliminary: 'Önce araştırma taslağımı hazırla', briefMerge: 'ChatGPT · birleşik taslak',
+  preliminaryHelp: 'ChatGPT, Claude ve Gemini hesap bağlantılarıyla kaynak arayıp okur. ChatGPT üç Markdown raporunu, kaynakları ve anlaşmazlıkları koruyarak araştırma taslağına dönüştürür. Bu ilk aşama Chrome gerektirmez; sonraki web araştırmaları Chrome kullanmaya devam eder.',
+  agentPreliminary: 'Hesap bağlantısıyla kaynaklar araştırılıyor',
+  preliminarySequence: 'Ön araştırma 3 → 1, ardından 3 → 2 → 2 → 1. Özgün raporlar korunur.',
+
   sharedPacket: 'Aynı tur, aynı kanıt dosyası',
   sharedPacketHelp: 'ChatGPT ve Claude aynı tam kanıt dosyasını alır. Görev talimatları ve iddia kimliği önekleri ayrı tutulur. Sağlayıcıların token sayımı ve kapasite bütçesi farklı olabilir; veri modele göre kısaltılmaz.',
   sharedPacketBytes: '{{bytes}} UTF-8 bayt',
@@ -177,8 +189,8 @@ export const researchTr: typeof researchEn = {
   manualFallback: 'Raporu elle içe aktar', created: 'Araştırma alanı oluşturuldu', imported: 'Rapor içe aktarıldı', copied: 'Tam paket kopyalandı', error: 'İşlem tamamlanamadı.',
   immutable: 'İçe aktarılan raporlar gönderildiği haliyle korunur. Tamamlanan raporu değiştirmek için yeni araştırma oluştur.',
   reportHash: 'İçerik parmak izi', web_deep_research_import: 'Web araştırmasından içe aktarıldı', account_synthesis: 'Hesap bağlantısıyla üretildi', manual_synthesis_import: 'Sentez içe aktarıldı',
-  automaticMode: 'Web araştırmasını benim yerime yap', automaticModeHelp: 'İlk beş görev, Chrome’da açık hesaplarınla Deep Research / Research modunda çalışır. Eklenti kendi görev pencerelerini yönetir; son üç aşama hesap bağlantılarınla sentezlenir.',
-  importMode: 'Araştırmayı kendim yapacağım', importModeHelp: 'İlk beş araştırmayı sağlayıcıların sitelerinde kendin çalıştır ve tam raporları buraya aktar.',
+  automaticMode: 'Web araştırmasını benim yerime yap', automaticModeHelp: 'Beş web araştırması görevi, Chrome’da açık hesaplarınla Deep Research / Research modunda çalışır. Eklenti kendi görev pencerelerini yönetir; son üç aşama hesap bağlantılarınla sentezlenir.',
+  importMode: 'Araştırmayı kendim yapacağım', importModeHelp: 'Beş web araştırmasını sağlayıcıların sitelerinde kendin çalıştır ve tam raporları buraya aktar.',
   connections: 'Chrome eklentisi bağlantısı', checkConnections: 'Bağlantıları denetle', deepCheck: 'Araştırma modu erişimini de denetle', openLogin: 'Eklenti bağlantısını kontrol et',
   connectionHelp: 'Chrome’da Open Notebook eklentisini açıp Yerel bağlantıyı başlat düğmesine bas. Chrome açık kalsın. Araştırma pencereleri aynı hesapları kullanır; günlük pencerendeki sekmeyi değiştirmez.',
   connected: 'Sayfaya erişiliyor', login_required: 'Giriş gerekli', verification_required: 'Güvenlik doğrulaması gerekli', quota_wait: 'Kota doldu', research_unavailable: 'Araştırma modu yok', browser_changed: 'Sağlayıcı arayüzü değişti', browser_unavailable: 'Tarayıcı kullanılamıyor', submission_uncertain: 'Gönderim doğrulanamadı',

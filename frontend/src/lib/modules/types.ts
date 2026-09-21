@@ -14,4 +14,5 @@ export type ModuleInfo = {
   frontend: { route: string; label_key: string; section: string; icon: string } | null
 }
 export type ModuleUpdate = { id: string; enabled?: boolean; settings?: ModuleSettings; expected_revision?: number }
-export type ModuleEntry = { Page: ComponentType; locales?: Record<string, Record<string, unknown>> }
+export type ModuleEntry = { SearchWidget?: ComponentType<{query:string}>
+  Page: ComponentType; locales?: Record<string, Record<string, unknown>> }

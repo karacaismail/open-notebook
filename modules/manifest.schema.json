@@ -36,6 +36,19 @@
           ],
           "title": "Icon",
           "type": "string"
+        },
+        "search_widget": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_/-]+\\.tsx$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Search Widget"
         }
       },
       "required": [
@@ -131,6 +144,19 @@
           ],
           "default": null,
           "title": "Proxy Alias"
+        },
+        "control_path": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_/-]+$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Control Path"
         }
       },
       "required": [

@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Search, ChevronDown, AlertCircle, Settings, Save, MessageCircleQuestion } from 'lucide-react'
 import { useModules } from '@/lib/modules/hooks'
+import { ModuleSearchWidgets } from '@/components/modules/ModuleSearchWidgets'
 import { HybridStatus, RetrievalFeedback } from '@/components/search/HybridStatus'
 import { useSearch } from '@/lib/hooks/use-search'
 import { useAsk } from '@/lib/hooks/use-ask'
@@ -41,6 +42,7 @@ export default function SearchPage() {
   )
 
   // Search state
+  const [submittedQuery,setSubmittedQuery] = useState('')
   const [searchQuery, setSearchQuery] = useState(urlMode === 'search' ? urlQuery : '')
   const [searchType, setSearchType] = useState<'text' | 'vector' | 'hybrid'>('hybrid')
   const [searchSources, setSearchSources] = useState(true)
@@ -92,6 +94,7 @@ export default function SearchPage() {
 
   const handleSearch = useCallback(() => {
     if (!searchQuery.trim()) return
+    setSubmittedQuery(searchQuery.trim())
 
     searchMutation.mutate({
       query: searchQuery,
@@ -454,6 +457,7 @@ export default function SearchPage() {
                   </div>
                 </div>
 
+                {scopeNotebookIds.length===0 && <ModuleSearchWidgets query={submittedQuery}/>}
                 {/* Search Results */}
                 {searchMutation.data && (
                   <div className="mt-6 space-y-3">

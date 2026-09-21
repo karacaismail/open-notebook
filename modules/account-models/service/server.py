@@ -14,6 +14,7 @@ import subprocess
 import threading
 import time
 import uuid
+from preliminary import PROFILES, WEB_SYSTEM, command as preliminary_command, trace as preliminary_trace, capabilities as preliminary_capabilities
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(os.environ.get('ACCOUNT_BRIDGE_ROOT', Path(__file__).resolve().parent))
@@ -91,6 +92,8 @@ def cli_env(provider):
 
 def command_for(model, profile='default'):
     spec = MODELS[model]
+    if profile in PROFILES:
+        return preliminary_command(command_for(model, 'research_synthesis'), spec, profile, SYSTEM)
     provider = spec['provider']
     binary = CONFIG['executables'][provider]
     research = profile == 'research_synthesis'
@@ -160,7 +163,7 @@ def prepare_prompt(body):
         raise BridgeError('JSON body must be an object.')
     if body.get('model') not in MODELS:
         raise BridgeError('Unknown account model. Use GET /v1/models.', 404)
-    if body.get('local_profile', 'default') not in ('default', 'research_synthesis'):
+    if body.get('local_profile', 'default') not in ('default', 'research_synthesis', *PROFILES):
         raise BridgeError('Unknown local execution profile.')
     if body.get('n', 1) != 1:
         raise BridgeError('Only n=1 is supported.')
@@ -192,7 +195,7 @@ def prepare_prompt(body):
         task['function'] = function
     response_format = body.get('response_format') or {}
     if body.get('local_prompt_format','json-v1') == 'research-markdown-v1':
-        if (body.get('local_profile') != 'research_synthesis' or tools or response_format
+        if (body.get('local_profile') not in ('research_synthesis', *PROFILES) or tools or response_format
                 or [m['role'] for m in cleaned] != ['system','user']):
             raise BridgeError('Markdown transport requires exactly one system and one user research message, without tools or structured output.')
         # Preserve both messages byte-for-byte; do not JSON-escape the full research packet again.
@@ -209,6 +212,7 @@ def prepare_prompt(body):
 def run_cli(model, prompt, profile='default'):
     provider = MODELS[model]['provider']
     if provider == 'gemini':
+        agent_name = 'notebook-preliminary' if profile == 'preliminary_research' else 'notebook-text'
         # AGY silently falls back to its general-purpose agent when a persona is
         # missing. Refuse that fallback so notebook requests keep the text profile.
         try:
@@ -217,7 +221,7 @@ def run_cli(model, prompt, profile='default'):
                 text=True, cwd=str(RUN_DIR), env=cli_env(provider), timeout=20)
         except (OSError, subprocess.TimeoutExpired):
             raise BridgeError('The Gemini text profile could not be checked.', 503)
-        if available.returncode or 'notebook-text' not in available.stdout.splitlines():
+        if available.returncode or agent_name not in available.stdout.splitlines():
             raise BridgeError('The Gemini text profile is missing. Run Baslat.command to restore it.', 503)
     proc = subprocess.Popen(command_for(model, profile), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, cwd=str(RUN_DIR),
@@ -226,7 +230,7 @@ def run_cli(model, prompt, profile='default'):
         stdin = (json.dumps({'event': 'user', 'message': {'content': prompt}}) + '\n'
                  if provider == 'gemini' else prompt)
         # A max-effort synthesis over a full five-report packet runs well past 15 minutes.
-        timeout = (CONFIG.get('research_timeout_seconds', 3600) if profile == 'research_synthesis'
+        timeout = (CONFIG.get('research_timeout_seconds', 3600) if profile in ('research_synthesis', *PROFILES)
                    else CONFIG.get('timeout_seconds', 300))
         stdout, stderr = proc.communicate(stdin, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -240,6 +244,7 @@ def run_cli(model, prompt, profile='default'):
     text = ''
     usage = {}
     incomplete = False
+    tool_trace, preliminary_result = preliminary_trace(stdout, provider) if profile in PROFILES else ({}, None)
     try:
         if provider == 'codex':
             messages = []
@@ -277,7 +282,7 @@ def run_cli(model, prompt, profile='default'):
         else:
             # Some CLI releases print an informational line before the JSON result.
             start = stdout.find('{')
-            data = json.loads(stdout[start:])
+            data = preliminary_result if preliminary_result is not None else json.loads(stdout[start:])
             if data.get('is_error') or data.get('error'):
                 raise ValueError('CLI returned an error')
             text = data.get('result')
@@ -312,7 +317,12 @@ def run_cli(model, prompt, profile='default'):
         if any(x in combined for x in ('rate limit', 'usage limit', 'quota', '429')):
             raise BridgeError('The account usage limit was reached. Wait for its reset or choose another account model.', 429)
         raise BridgeError('The account CLI could not produce a response. Check its login and retry.', 502)
+    if profile in PROFILES:
+        usage['research_trace'] = tool_trace
+        if profile == 'preliminary_research' and (not tool_trace.get('searched') or not tool_trace.get('read_sources') or tool_trace.get('unexpected_tools')):
+            raise BridgeError('Ön araştırmada web aracı kullanımı doğrulanamadı. Model çıktısı araştırma olarak kabul edilmedi.', 422)
     if usage:
+        usage.setdefault('prompt_tokens',0);usage.setdefault('completion_tokens',0)
         usage['total_tokens'] = usage['prompt_tokens'] + usage['completion_tokens']
     return text, usage
 
@@ -331,8 +341,8 @@ def completion(body):
     prompt, function, response_format = prepare_prompt(body)
     model = body['model']
     with QUEUES[model].slot():
-        if body.get('local_profile') == 'research_synthesis':
-            text, usage = run_cli(model, prompt, 'research_synthesis')
+        if body.get('local_profile') in ('research_synthesis', *PROFILES):
+            text, usage = run_cli(model, prompt, body['local_profile'])
         else:
             text, usage = run_cli(model, prompt)
     message = {'role': 'assistant', 'content': text}
@@ -356,6 +366,10 @@ def completion(body):
             'requested_model':spec.get('research_cli_model',spec.get('cli_model')),
             'requested_effort':spec.get('research_effort','high'),
             'model_selection':'explicit CLI request; provider-resolved model not independently attested'}
+    if body.get('local_profile') in PROFILES:
+        selected=preliminary_capabilities(MODELS)[model]
+        result['execution']={'profile':body['local_profile'],'requested_model':selected['model'],'requested_effort':selected['effort'],
+            'model_selection':'explicit CLI request; see reported_models for provider observations',**usage.pop('research_trace',{})}
     return result
 
 
@@ -385,6 +399,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, {'status': 'healthy', 'adapter': 'official-account-cli',
                                  'runtime_fingerprints': {model: runtime_fingerprint(model) for model in MODELS if MODELS[model]['provider'] in ('codex','claude')},
                                  'prompt_formats': ['json-v1','research-markdown-v1'],
+                                 'preliminary': preliminary_capabilities(MODELS),
                                  'queues': {name: q.status() for name, q in QUEUES.items()}})
             return
         if not self.authorized():

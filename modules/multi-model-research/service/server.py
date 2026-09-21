@@ -86,6 +86,14 @@ async def browser_status(deep:bool=False):
         results.append(await BROWSER.runtime.status(provider,deep=deep))
     return {'checked_at':date.today().isoformat(),'deep':deep,'connections':results}
 
+@app.get('/accounts/status')
+async def accounts_status():
+    import httpx
+    async with httpx.AsyncClient(timeout=10) as client:
+        response=await client.get('http://127.0.0.1:8317/health')
+        response.raise_for_status()
+        return {'profiles':response.json().get('preliminary',{}),'queues':response.json().get('queues',{})}
+
 @app.post('/browser/login')
 async def browser_login():
     """Launch an automation-free Chrome on the research profile for the user to sign in.
@@ -121,6 +129,7 @@ class RunCreate(BaseModel):
     scope:str=Field(default='',max_length=30000)
     language:str=Field(default='Türkçe',min_length=2,max_length=60)
     auto_synthesize:bool=True
+    preliminary:bool=True
     execution_mode:Literal['imports','browser']='imports'
     as_of:date=Field(default_factory=date.today)
     notebook_id:str|None=None
@@ -130,7 +139,7 @@ async def list_runs():
     result=[]
     for run in await ENGINE.store.all():
         result.append({k:run[k] for k in ('id','question','scope','created_at','updated_at','status','notebook_id')}
-                      | {'completed':sum(s['status']=='completed' for s in run['stages'])})
+                      | {'completed':sum(s['status']=='completed' for s in run['stages']),'total':len(run['stages']),'preliminary':run.get('preliminary',False)})
     return result
 
 @app.post('/runs',status_code=201)

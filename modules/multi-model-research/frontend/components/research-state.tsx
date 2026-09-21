@@ -7,7 +7,7 @@ import type { ResearchRun, ResearchStage } from '@/modules/multi-model-research/
 import { cn } from '@/lib/utils'
 
 export const attentionStates = ['integrity_error', 'calibration_required', 'failed', 'interrupted', 'context_limit', 'login_required', 'verification_required', 'quota_wait', 'research_unavailable', 'browser_changed', 'browser_unavailable', 'submission_uncertain']
-export const roundKeys: Record<number, string> = { 1: 'research.round1', 2: 'research.round2', 3: 'research.round3', 4: 'research.round4' }
+export const roundKeys: Record<number, string> = { 0: 'research.round0', 1: 'research.round1', 2: 'research.round2', 3: 'research.round3', 4: 'research.round4' }
 export const statusKeys: Record<string, string> = {
   integrity_error: 'research.integrity_error', calibration_required: 'research.calibration_required', waiting_input: 'research.waiting_input', pending: 'research.pending', ready: 'research.ready', running: 'research.running', completed: 'research.completed', failed: 'research.failed', interrupted: 'research.interrupted', context_limit: 'research.context_limit', paused: 'research.paused', needs_attention: 'research.needs_attention', connected: 'research.connected', login_required: 'research.login_required', verification_required: 'research.verification_required', quota_wait: 'research.quota_wait', research_unavailable: 'research.research_unavailable', browser_changed: 'research.browser_changed', browser_unavailable: 'research.browser_unavailable', submission_uncertain: 'research.submission_uncertain',
 }

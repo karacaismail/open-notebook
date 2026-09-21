@@ -47,16 +47,28 @@ def digest(value: str | bytes) -> str:
     return hashlib.sha256(value.encode() if isinstance(value, str) else value).hexdigest()
 
 
-def initial_stages(execution_mode="imports"):
-    return [{'id':sid, 'provider':provider, 'round':round_, 'mode':('browser' if mode=='import' and execution_mode=='browser' else mode),
+PRE_STAGES = [('pre_research_gemini','Gemini',0,'account'),('pre_research_chatgpt','ChatGPT',0,'account'),('pre_research_claude','Claude',0,'account'),('pre_brief_chatgpt','ChatGPT',0,'account')]
+
+
+def initial_stages(execution_mode="imports", preliminary=False):
+    stages = [{'id':sid, 'provider':provider, 'round':round_, 'mode':('browser' if mode=='import' and execution_mode=='browser' else mode),
              'status':('ready' if execution_mode=='browser' else 'waiting_input') if round_ == 1 else 'pending', 'attempts':0,
              'report':None, 'error':None, 'usage':None, 'note_id':None, 'browser_progress':None,
              'retry_index':0, 'next_retry_at':None,
              'estimated_input_tokens':None, 'input_sha256':None,
-             'started_at':None, 'finished_at':None} for sid,provider,round_,mode in STAGES]
+             'started_at':None, 'finished_at':None} for sid,provider,round_,mode in (PRE_STAGES + STAGES if preliminary else STAGES)]
+    if preliminary:
+        for stage in stages:
+            stage['status']='ready' if stage['id'].startswith('pre_research_') else 'pending'
+            if stage['round']==0:
+                stage['account_profile']='preliminary_merge' if stage['id']=='pre_brief_chatgpt' else 'preliminary_research'
+                stage['depends_on']=[s[0] for s in PRE_STAGES[:3]] if stage['id']=='pre_brief_chatgpt' else []
+    return stages
 
 
 def ancestors(run, stage):
+    if 'depends_on' in stage:
+        return [s for s in run['stages'] if s['id'] in stage['depends_on']]
     return [s for s in run['stages'] if s['round'] < stage['round']]
 
 
@@ -104,10 +116,13 @@ def report_packet(run, stage):
 
 def prompt_for(run, stage, packet_format=None):
     phase=stage['round']
-    task={1: 'Bu soru ve kapsam için web uygulamasının Deep Research modunda tek, kapsamlı ve bağımsız bir araştırma yap. Birincil kaynaklara öncelik ver; farklı görüşleri, güncel kanıtları ve belirsizlikleri karşılaştır. Diğer modellerin raporlarını varsayma. Kaynakları açık URL, başlık ve erişim tarihiyle listele. Ayrıntılı raporu kaynaklarıyla birlikte Markdown olarak ver.',
+    task={0: ('Üç bağımsız ön araştırma raporunu tek, tutarlı bir Markdown araştırma taslağına dönüştür. Ortak bulguları, gerçek ayrışmaları, çözülmemiş çelişkileri ve kaynakları ayır. Zorla uzlaşma üretme. Özgün kullanıcı sorusunu değiştirme. Sonraki Deep Research aşamalarının araştıracağı alt soruları, kapsamı, karşı hipotezleri, karar ölçütlerini ve eksik kanıtları tanımla. Raporları arka arkaya yapıştırma; gerekçeli bir sentez üret. Bu metin ön araştırma taslağıdır, nihai karar değildir.' if stage['id']=='pre_brief_chatgpt' else 'Özgün soru ve kapsam için uzun, kapsamlı, bağımsız bir ön araştırma yap. Web arama ve sayfa okuma araçlarını gerçekten kullan; birincil kaynakları, karşı kanıtları, alternatifleri ve gözden kaçabilecek soruları araştır. Web sitelerinin Deep Research modunu kullanma. Kaynaklara dayalı bulgular, gerekçeli değerlendirme, belirsizlikler ve sonraki araştırma için önerilen sorular içeren eksiksiz bir Markdown raporu üret. Diğer modellerin raporlarını görmedin; onların görüşlerini varsayma.'),
+          1: 'Bu soru ve kapsam için web uygulamasının Deep Research modunda tek, kapsamlı ve bağımsız bir araştırma yap. Birincil kaynaklara öncelik ver; farklı görüşleri, güncel kanıtları ve belirsizlikleri karşılaştır. Diğer modellerin raporlarını varsayma. Kaynakları açık URL, başlık ve erişim tarihiyle listele. Ayrıntılı raporu kaynaklarıyla birlikte Markdown olarak ver.',
           2: 'Aşağıdaki ortak paketin tamamını inceleyerek web uygulamasının Deep Research modunda tek bir yeniden araştırma yap. Önceki raporları yalnızca özetleme: çelişkili iddiaları, eksik kanıtları ve karşı argümanları yeni kaynaklarla araştır. Önceki sonuçlardan hangilerini doğruladığını veya düzelttiğini açıkla. Kaynak URL’lerini ve önceki raporlara atıfları koru. Erişemediğin kaynakları belirt.',
           3: 'Ortak paketteki tüm araştırmaları bağımsız biçimde sentezle. Kanıt/iddia karşılaştırması, doğrulanan ve çelişen bulgular, seçenekler, güçlü/zayıf yönler, kaynak URL’leri ve çözülmemiş itirazlar içeren kapsamlı bir rapor üret. Araştırma yapmış gibi davranma. Sağlayıcının adından bağımsız olarak kanıt kalitesine göre değerlendir.',
           4: 'İki sentezi ve önceki araştırma kanıtlarını birleştirerek kullanıcıya nihai yanıtı ve gerekçeli kararı ver. Açık bir öneri, kanıt temelli kısa gerekçe, alternatiflerin neden geride kaldığı, belirsizlikler, hangi yeni kanıtın kararı değiştireceği ve kaynak URL’leri bulunsun. Çoğunluk görüşünü doğrulukla eşitleme; aynı kaynağı tekrarlayan raporları bağımsız kanıt sayma.'}[phase]
+    if phase == 1 and run.get('preliminary'):
+        task += '\nÖn araştırmanın ortak taslağını başlangıç olarak kullan; taslağı doğrulanmış gerçek veya nihai karar sayma. Özgün soru, tüm ön raporlar ve kaynaklar aşağıda korunuyor. Bağımsız olarak yeniden doğrula.'
     packet=report_packet(run,stage)
     protocol = ('\n\n'+PROTOCOL.replace('CURRENT_STAGE',stage['id'])) if run.get('prompt_version',1)>=VERSION else ''
     selected_format = packet_format or stage.get('packet_format') or run.get('packet_format')

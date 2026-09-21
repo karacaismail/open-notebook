@@ -18,7 +18,7 @@ async def test_authenticated_multipart_dates_and_lossless_export(engine,monkeypa
         assert (await client.get('/health')).status_code==200
         assert (await client.get('/runs')).status_code==401
         client.headers['Authorization']='Bearer '+server.KEY
-        data={'question':'Test research workspace with primary evidence','auto_synthesize':False,'as_of':'2026-09-21'}
+        data={'preliminary':False,'question':'Test research workspace with primary evidence','auto_synthesize':False,'as_of':'2026-09-21'}
         headers={'Idempotency-Key':uuid.uuid4().hex}
         response=await client.post('/runs',json=data,headers=headers);assert response.status_code==201,response.text
         run=response.json();rid=run['id']

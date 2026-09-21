@@ -143,7 +143,7 @@ async def test_proxy_preserves_idempotency_but_not_client_authorization(registry
         assert result.status_code==201
         assert captured[0].headers['authorization']=='Bearer sidecar-key'
         assert captured[0].headers['idempotency-key']=='one-operation'
-        assert json.loads(captured[0].content)=={'question':'test','language':'Türkçe','auto_synthesize':True,'execution_mode':'browser'}
+        assert json.loads(captured[0].content)=={'question':'test','language':'Türkçe','auto_synthesize':True,'execution_mode':'browser','preliminary':True}
 
 
 def test_overlay_preflight_does_not_modify_checkout_or_destination(tmp_path):
@@ -318,3 +318,27 @@ def test_unrelated_module_edits_do_not_conflict(registry):
     registry.update('multi-model-research',settings={'language':'English'},expected_revision=research['revision'])
     assert registry.settings('multi-model-research')['language']=='English'
     assert registry.settings('account-models')['timeout_seconds']==1800
+
+
+def test_private_service_config_is_not_an_http_setting(tmp_path,monkeypatch):
+    from open_notebook.modules.service import service_config
+    from open_notebook.modules.registry import Manifest
+    key=tmp_path/'key';key.write_text('sidecar-only-secret')
+    config=tmp_path/'services.json';config.write_text(json.dumps({'demo':{'url':'http://127.0.0.1:8322','key_file':str(key)}}))
+    monkeypatch.setenv('OPEN_NOTEBOOK_SERVICE_CONFIG',str(config))
+    item=Manifest(schema_version=1,id='demo',name='Demo',description='',version='1',author='test',activation='runtime',service={'url_env':'DEMO_TEST_URL','key_env':'DEMO_TEST_KEY'})
+    base,headers=service_config(item);assert base=='http://127.0.0.1:8322' and headers['Authorization']=='Bearer sidecar-only-secret'
+    monkeypatch.setenv('DEMO_TEST_URL','http://override');monkeypatch.setenv('DEMO_TEST_KEY','override-key')
+    assert service_config(item)==('http://override',{'Authorization':'Bearer override-key'})
+
+
+@pytest.mark.asyncio
+async def test_service_control_failure_restores_previous_module_state(registry,monkeypatch):
+    from open_notebook.modules.service import ModuleManager
+    item=registry.get('multi-model-research');item.service.control_path='control'
+    monkeypatch.setenv('LOCAL_RESEARCH_URL','http://sidecar');monkeypatch.setenv('LOCAL_RESEARCH_KEY','test')
+    real=httpx.AsyncClient
+    monkeypatch.setattr(httpx,'AsyncClient',lambda **kw:real(transport=httpx.MockTransport(lambda req:httpx.Response(503)),**kw))
+    registry.update('account-models',enabled=True)
+    with pytest.raises(ModuleError,match='restored'):await ModuleManager(registry).configure('multi-model-research',enabled=True)
+    assert 'multi-model-research' not in registry.enabled()

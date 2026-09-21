@@ -6,7 +6,7 @@ import type { ResearchRun } from '@/modules/multi-model-research/api'
 import { cn } from '@/lib/utils'
 import { attentionStates, ResearchStatus, roundKeys, statusKeys } from './research-state'
 
-const roundIcons = [Search, GitCompareArrows, Layers3, ShieldCheck]
+const roundIcons = [Search, Search, GitCompareArrows, Layers3, ShieldCheck]
 const providerColor: Record<string, string> = {
   Gemini: 'bg-blue-500/10 text-blue-700 dark:text-blue-300',
   ChatGPT: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
@@ -15,6 +15,7 @@ const providerColor: Record<string, string> = {
 
 export function ResearchWorkflow({ run, selected, onSelect }: { run: ResearchRun; selected: string; onSelect: (id: string) => void }) {
   const { t } = useTranslation()
+  const rounds = [...new Set(run.stages.map(s => s.round))]
   const completed = run.stages.filter(s => s.status === 'completed').length
   const sources = new Set(run.stages.flatMap(s => s.report?.citations || [])).size
   const activeRound = run.stages.find(s => s.status === 'running')?.round ?? run.stages.find(s => s.status !== 'completed')?.round
@@ -25,18 +26,18 @@ export function ResearchWorkflow({ run, selected, onSelect }: { run: ResearchRun
       <p className="mt-3 text-xs text-muted-foreground">{t('research.evidenceSummary', { reports: completed, sources })}</p>
     </div>
     <ol className="space-y-0 px-5 py-5">
-      {[1, 2, 3, 4].map(round => {
+      {rounds.map((round, phase) => {
         const stages = run.stages.filter(stage => stage.round === round)
         const done = stages.every(stage => stage.status === 'completed')
         const active = activeRound === round
-        const Icon = roundIcons[round - 1]
+        const Icon = roundIcons[round]
         return <li key={round} className="relative pb-6 last:pb-0">
           {round < 4 && <span aria-hidden className={cn('absolute start-[15px] top-8 h-[calc(100%-1.5rem)] border-s', done ? 'border-emerald-500/30' : 'border-border')} />}
           <div className="relative mb-3 flex items-center gap-3">
             <span aria-hidden className={cn('flex size-8 shrink-0 items-center justify-center rounded-full border bg-card', done ? 'border-emerald-500/25 text-emerald-600 dark:text-emerald-400' : active ? 'border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-300' : 'text-muted-foreground')}>
               {done ? <Check className="size-4" /> : <Icon className="size-4" />}
             </span>
-            <div className="min-w-0 flex-1"><h3 className={cn('text-sm font-semibold', !active && !done && 'text-muted-foreground')}>{t(roundKeys[round])}</h3><p className="mt-0.5 text-[11px] text-muted-foreground">{t('research.phaseNumber', { number: round, total: 4 })}</p></div>
+            <div className="min-w-0 flex-1"><h3 className={cn('text-sm font-semibold', !active && !done && 'text-muted-foreground')}>{t(roundKeys[round])}</h3><p className="mt-0.5 text-[11px] text-muted-foreground">{t('research.phaseNumber', { number: phase + 1, total: rounds.length })}</p></div>
             {active && <span className="rounded-full border border-blue-500/20 bg-blue-500/5 px-2 py-1 text-[10px] font-medium text-blue-700 dark:text-blue-300">{t('research.currentPhase')}</span>}
           </div>
           <div className={cn('ms-11', done ? 'flex flex-wrap gap-2' : 'space-y-2')}>
@@ -44,10 +45,10 @@ export function ResearchWorkflow({ run, selected, onSelect }: { run: ResearchRun
               done ? 'inline-flex min-h-10 items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-medium' : 'block w-full rounded-xl border p-3',
               selected === stage.id ? 'border-primary/60 bg-primary/5 ring-1 ring-primary/10' : stage.status === 'running' ? 'border-blue-500/25 bg-blue-500/5 hover:bg-blue-500/10' : 'border-border bg-background/40 hover:bg-accent/50',
               stage.status === 'pending' && 'text-muted-foreground')}>
-              {done ? <><Check aria-hidden className="size-3 text-emerald-500" />{stage.provider}</> : <>
-                <span className="flex items-center gap-2"><span aria-hidden className={cn('flex size-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold', providerColor[stage.provider])}>{stage.provider[0]}</span><span className="flex-1 text-sm font-semibold">{stage.provider}</span><ChevronRight aria-hidden className="size-3.5 text-muted-foreground" /></span>
+              {done ? <><Check aria-hidden className="size-3 text-emerald-500" />{stage.account_profile === 'preliminary_merge' ? t('research.briefMerge') : stage.provider}</> : <>
+                <span className="flex items-center gap-2"><span aria-hidden className={cn('flex size-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold', providerColor[stage.provider])}>{stage.provider[0]}</span><span className="flex-1 text-sm font-semibold">{stage.account_profile === 'preliminary_merge' ? t('research.briefMerge') : stage.provider}</span><ChevronRight aria-hidden className="size-3.5 text-muted-foreground" /></span>
                 <span className="mt-2 block"><ResearchStatus value={stage.status} /></span>
-                {stage.status === 'running' && <span className="mt-2 flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground"><CircleDot aria-hidden className="mt-0.5 size-3 shrink-0 text-blue-500" />{t(stage.mode === 'browser' ? 'research.agentBrowsing' : 'research.agentSynthesizing')}</span>}
+                {stage.status === 'running' && <span className="mt-2 flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground"><CircleDot aria-hidden className="mt-0.5 size-3 shrink-0 text-blue-500" />{t(stage.account_profile === 'preliminary_research' ? 'research.agentPreliminary' : stage.mode === 'browser' ? 'research.agentBrowsing' : 'research.agentSynthesizing')}</span>}
               </>}
             </button>)}
           </div>

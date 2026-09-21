@@ -167,3 +167,9 @@ Never change volume mounts as part of a module migration.
 
 See [the architecture decision](../docs/7-DEVELOPMENT/module-system.md) and the
 machine-readable [customization inventory](CUSTOMIZATION-INVENTORY.json).
+
+### Yerel arama ve ön araştırma ekleri
+
+`local-files`, özel anahtarlı yerel servis üzerinden dosya kataloğu ve hibrit arama sunar. `FrontendSpec.search_widget` genel Search sayfasındaki sorguyu isteğe bağlı modül görünümüne iletir; modüller birbirlerinin iç kodlarını içe aktarmaz. `ServiceSpec.control_path` duraklatılabilen servislerin etkinlik durumunu modül ayarlarıyla eşleştirir. Servis geçişi başarısızsa önceki modül yapılandırması geri yüklenir. Dağıtıma ait `data/module-services.json`, konteyneri yeniden oluşturmadan sabit servis adresi ve anahtar dosyası tanımlayabilir; kullanıcı API isteği bu dosyayı değiştiremez.
+
+Ayrıntılar: [yerel dosyalar](local-files/README.md), [ön araştırma](multi-model-research/PRELIMINARY-RESEARCH.md).
