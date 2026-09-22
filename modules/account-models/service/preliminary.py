@@ -1,7 +1,7 @@
 """Tarayıcısız ön araştırma için dar kapsamlı hesap profilleri."""
 import json
 
-PROFILES = ('preliminary_research', 'preliminary_merge')
+PROFILES = ('preliminary_research', 'preliminary_merge', 'research_review', 'review_merge')
 DEFAULTS = {
     'codex': ('gpt-6-astra', 'ultra'),
     'claude': ('claude-fable-5-1', 'max'),
@@ -25,7 +25,9 @@ def selection(spec):
 def command(base, spec, profile, old_system):
     args = list(base)
     provider = spec['provider']; model, effort = selection(spec)
-    web = profile == 'preliminary_research'
+    web = profile in ('preliminary_research', 'research_review')
+    system = WEB_SYSTEM if profile != 'research_review' else WEB_SYSTEM.replace(
+        'preliminary research', 'independent re-research').replace('Markdown artifact', 'structured JSON artifact')
     def flag(name, value):
         if name in args: args[args.index(name)+1] = value
         else: args.extend([name,value])
@@ -36,7 +38,7 @@ def command(base, spec, profile, old_system):
         for i, value in enumerate(args):
             if value.startswith('model_reasoning_effort='): args[i]='model_reasoning_effort='+json.dumps(effort)
             if web and value=='web_search="disabled"': args[i]='web_search="live"'
-            if web and value.startswith('base_instructions='): args[i]='base_instructions='+json.dumps(WEB_SYSTEM)
+            if web and value.startswith('base_instructions='): args[i]='base_instructions='+json.dumps(system)
         # Keep stdin marker last even when the model flag was added.
         args.remove('-'); args.append('-')
     elif provider == 'claude':
@@ -44,7 +46,7 @@ def command(base, spec, profile, old_system):
         if web:
             if '--restricted' in args: args.remove('--restricted')
             flag('--tools','WebSearch,WebFetch');flag('--allowedTools','WebSearch,WebFetch')
-            flag('--system-prompt',WEB_SYSTEM)
+            flag('--system-prompt',system)
             flag('--output-format','stream-json');args.append('--verbose')
     else:
         flag('--agent','notebook-preliminary' if web else 'notebook-text')
@@ -54,7 +56,7 @@ def command(base, spec, profile, old_system):
 
 def trace(stdout, provider):
     """Return tool/model metadata only; never retain prompts or tool response bodies."""
-    calls=[];models=[];result=None;forbidden=[]
+    calls=[];models=[];result=None;forbidden=[];pending={}
     for line in stdout.splitlines():
         try: event=json.loads(line)
         except (ValueError,TypeError): continue
@@ -65,13 +67,19 @@ def trace(stdout, provider):
                 action=item.get('action',{}).get('type','search')
                 if action=='other' and str(item.get('query','')).startswith(('https://','http://')):action='open'
                 calls.append({'tool':'web_search','action':action})
+            if event.get('type')=='item.completed' and item.get('type') in ('command_execution','file_change','mcp_tool_call','collab_tool_call'):
+                forbidden.append(item['type'])
         elif provider=='claude':
             message=event.get('message',{})
             if message.get('model'):models.append(message['model'])
             if event.get('type')=='system' and event.get('model'):models.append(event['model'])
             for block in message.get('content',[]) if isinstance(message.get('content'),list) else []:
-                if block.get('type')=='tool_use' and block.get('name') in ('WebSearch','WebFetch'):
-                    calls.append({'tool':block['name']})
+                if block.get('type')=='tool_use':
+                    if block.get('name') in ('WebSearch','WebFetch'):
+                        pending[block.get('id')]={'tool':block['name']}
+                    else:forbidden.append(block.get('name','unknown'))
+                if block.get('type')=='tool_result' and block.get('tool_use_id') in pending and not block.get('is_error'):
+                    calls.append(pending.pop(block['tool_use_id']))
             if event.get('type')=='result':result=event
         else:
             if event.get('model'):models.append(str(event['model']))

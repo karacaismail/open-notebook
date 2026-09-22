@@ -21,3 +21,25 @@ def test_tool_evidence_requires_search_and_read_not_final_claims():
     assert result['searched'] and result['read_sources']
     event={'event':'step_update','step_update':{'state':'DONE','tool_name':'run_command','tool_info':{'parameters':{}}}}
     assert trace(json.dumps(event),'gemini')[0]['unexpected_tools']==['run_command']
+
+
+def test_review_profiles_keep_tools_out_of_reconciliation():
+    for name in ('chatgpt-account','claude-account'):
+        web=server.command_for(name,'research_review')
+        merge=server.command_for(name,'review_merge')
+        if name.startswith('chatgpt'):
+            assert 'web_search="live"' in web and 'web_search="disabled"' in merge
+            assert 'exec' in web and '--ignore-user-config' in web
+        else:
+            assert web[web.index('--tools')+1]=='WebSearch,WebFetch'
+            assert merge[merge.index('--tools')+1]==''
+            assert '--strict-mcp-config' in web and '--no-chrome' in web
+
+
+def test_failed_claude_tool_invocations_do_not_count_as_research():
+    events=[{'type':'assistant','message':{'content':[{'type':'tool_use','id':'a','name':'WebFetch'}]}},
+            {'type':'user','message':{'content':[{'type':'tool_result','tool_use_id':'a','is_error':True}]}}]
+    assert not trace('\n'.join(map(json.dumps,events)),'claude')[0]['read_sources']
+    events[-1]['message']['content'][0]['is_error']=False
+    assert trace('\n'.join(map(json.dumps,events)),'claude')[0]['read_sources']
+    assert trace(json.dumps({'type':'item.completed','item':{'type':'command_execution'}}),'codex')[0]['unexpected_tools']

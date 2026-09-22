@@ -64,6 +64,14 @@ describe('Evidence preparation is explicit',()=>{
     const {container}=render(<PacketCompaction audit={null}/> )
     expect(container).toBeEmptyDOMElement()
   })
+  it('distinguishes fresh re-research from source-only synthesis and exposes its progress',()=>{
+    render(<PacketCompaction preparation={{version:'account-review-v1',parts:3,minimum_calls:4,source_bytes:100,source_sha256:'hash',coverage_verified:true,semantic_lossless:false,status:'checking_sources',current:'P2',completed_calls:2}}/> )
+    expect(screen.getByText('Account re-research')).toBeInTheDocument()
+    expect(screen.getByText(/Checking quoted passages against public sources/)).toBeInTheDocument()
+    expect(screen.getByText(/not factual truth/)).toBeInTheDocument()
+    expect(screen.getByText('P2')).toBeInTheDocument()
+    expect(screen.queryByText(/Continue this stage to begin/)).not.toBeInTheDocument()
+  })
 })
 
 describe('Recorded stop reasons', () => {

@@ -62,7 +62,7 @@ export const researchEn = {
 
   requestedModels:'Requested account models', accountStatusError:'Account configuration could not be checked.', modelSelectionHelp:'These are the preferred defaults. Before preliminary research, the account’s available models are ranked and the maximum supported effort is selected. Model unavailability may select the next candidate; quota and partial-response failures pause the stage. The selected model is recorded in its report; synthesis keeps its calibrated runtime.',
   round0: 'Preliminary research', preliminary: 'Prepare my research brief first', briefMerge: 'ChatGPT · combined brief',
-  preliminaryHelp: 'ChatGPT, Claude and Gemini search and read sources through your account connections. ChatGPT combines their three Markdown reports into a research brief, preserving sources and disagreements. This first phase needs no Chrome window. The following web research phases still use Chrome.',
+  preliminaryHelp: 'ChatGPT, Claude and Gemini search and read sources through your account connections. ChatGPT combines their three Markdown reports into a research brief, preserving sources and disagreements. This first phase needs no Chrome window. Initial independent web research still uses Chrome.',
   agentPreliminary: 'Searching sources through the account connection',
   preliminarySequence: 'Preliminary research 3 → 1, then the existing 3 → 2 → 2 → 1 workflow. Original reports remain available.',
 
@@ -103,6 +103,17 @@ export const researchEn = {
   budgetRemaining: "Remaining counted tokens",
 
   preparationTitle: "Evidence preparation",
+  accountReview: 'Research again through my accounts',
+  accountReviewHelp: 'ChatGPT and Claude independently research the same frozen evidence in measured parts, search for fresh sources, and reconcile the findings across parts. No Chrome window is needed for Research again. Completed parts are saved; account quotas apply. Original reports remain available. This setting applies to new research.',
+  accountReviewStage: 'Account re-research',
+  accountReviewChecks: 'Fresh source passages are fetched independently and checked against the quoted text. This checks textual presence, not factual truth. Conditions, counter-evidence and unresolved dependencies remain in the working records.',
+  reviewPlanned: 'The same evidence parts will be researched independently by both accounts.',
+  reviewResearching: 'Searching and reading sources for an evidence part',
+  reviewChecking: 'Checking quoted passages against public sources',
+  reviewReconciling: 'Reconciling findings and dependencies across all parts',
+  reviewCompleted: 'Re-research and passage checks completed',
+  reviewAutomaticHelp: 'The initial three research reports use Deep Research in Chrome. Research again runs through your account connections, followed by account synthesis.',
+  reviewImportHelp: 'Import the initial three research reports. Research again and synthesis then run through your account connections.',
   referenceHelp: "Exact repetitions use a shared dictionary included in the input. No unique sentence is removed. Exact reconstruction is verified before submission.",
   referenceSaved: "{{blocks}} shared blocks · {{tokens}} tokens saved",
   preparationParts: "Read the complete evidence in {{parts}} parts",
@@ -235,7 +246,7 @@ export const researchTr: typeof researchEn = {
 
   requestedModels:'Hesaplardan istenen modeller', accountStatusError:'Hesap yapılandırması denetlenemedi.', modelSelectionHelp:'Bunlar tercih edilen varsayılanlardır. Ön araştırmadan önce hesabın mevcut modelleri sıralanır ve desteklenen en yüksek efor seçilir. Model sunulmuyorsa sıradaki aday seçilebilir; kota ve yarım yanıt hataları aşamayı bekletir. Seçilen model rapora kaydedilir; sentez ölçülmüş model yapılandırmasını korur.',
   round0: 'Ön araştırma', preliminary: 'Önce araştırma taslağımı hazırla', briefMerge: 'ChatGPT · birleşik taslak',
-  preliminaryHelp: 'ChatGPT, Claude ve Gemini hesap bağlantılarıyla kaynak arayıp okur. ChatGPT üç Markdown raporunu, kaynakları ve anlaşmazlıkları koruyarak araştırma taslağına dönüştürür. Bu ilk aşama Chrome gerektirmez; sonraki web araştırmaları Chrome kullanmaya devam eder.',
+  preliminaryHelp: 'ChatGPT, Claude ve Gemini hesap bağlantılarıyla kaynak arayıp okur. ChatGPT üç Markdown raporunu, kaynakları ve anlaşmazlıkları koruyarak araştırma taslağına dönüştürür. Bu ilk aşama Chrome gerektirmez; ilk bağımsız web araştırmaları Chrome kullanır.',
   agentPreliminary: 'Hesap bağlantısıyla kaynaklar araştırılıyor',
   preliminarySequence: 'Ön araştırma 3 → 1, ardından 3 → 2 → 2 → 1. Özgün raporlar korunur.',
 
@@ -276,6 +287,17 @@ export const researchTr: typeof researchEn = {
   budgetRemaining: "Kalan sayılan token",
 
   preparationTitle: "Kanıt hazırlığı",
+  accountReview: 'Hesaplarımla yeniden araştır',
+  accountReviewHelp: 'ChatGPT ve Claude aynı değişmez kanıtı ölçülmüş parçalar halinde bağımsız araştırır, yeni kaynaklar arar ve parçalar arası bulguları birleştirir. Yeniden araştırma Chrome gerektirmez. Tamamlanan parçalar kaydedilir; hesap kotaları geçerlidir. Özgün raporlar korunur. Ayar yeni araştırmalara uygulanır.',
+  accountReviewStage: 'Hesap üzerinden yeniden araştırma',
+  accountReviewChecks: 'Yeni kaynak pasajları bağımsız indirilerek alıntı metinleriyle eşleştirilir. Bu kontrol metnin varlığını doğrular; olgusal doğruluğunu kanıtlamaz. Koşullar, karşı kanıtlar ve çözülemeyen bağımlılıklar çalışma kayıtlarında korunur.',
+  reviewPlanned: 'Aynı kanıt parçaları iki hesap tarafından bağımsız araştırılacak.',
+  reviewResearching: 'Kanıt parçası için kaynaklar aranıyor ve okunuyor',
+  reviewChecking: 'Alıntı pasajları açık kaynaklarla karşılaştırılıyor',
+  reviewReconciling: 'Tüm parçaların bulguları ve bağımlılıkları uzlaştırılıyor',
+  reviewCompleted: 'Yeniden araştırma ve pasaj kontrolleri tamamlandı',
+  reviewAutomaticHelp: 'İlk üç araştırma raporu Chrome’da Deep Research ile hazırlanır. Yeniden araştırma ve ardından sentez, hesap bağlantılarınla çalışır.',
+  reviewImportHelp: 'İlk üç araştırma raporunu içe aktar. Yeniden araştırma ve sentez, ardından hesap bağlantılarınla çalışır.',
   referenceHelp: "Birebir tekrarlar, girdiye dahil edilen ortak sözlükle temsil edilir. Benzersiz cümle silinmez. Gönderimden önce birebir geri kurma doğrulanır.",
   referenceSaved: "{{blocks}} ortak blok · {{tokens}} token tasarrufu",
   preparationParts: "Tam kanıtı {{parts}} parçada oku",

@@ -59,3 +59,5 @@ What this makes easier, what it makes harder, what to watch. (bullets)
 - [ADR-011: Research ECA rules and measured token accounting](ADR-011-research-eca-rules.md)
 - [ADR-012: Optional local hybrid search](ADR-012-hybrid-search.md)
 - [ADR-013: Verified evidence preparation](ADR-013-evidence-preparation.md) — reversible references, exhaustive input partitions and durable account synthesis.
+
+- [ADR-014: Account-based re-research](ADR-014-account-research-again.md) — shared evidence parts, fresh source checks and durable reconciliation.

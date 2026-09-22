@@ -50,7 +50,7 @@ def digest(value: str | bytes) -> str:
 PRE_STAGES = [('pre_research_gemini','Gemini',0,'account'),('pre_research_chatgpt','ChatGPT',0,'account'),('pre_research_claude','Claude',0,'account'),('pre_brief_chatgpt','ChatGPT',0,'account')]
 
 
-def initial_stages(execution_mode="imports", preliminary=False):
+def initial_stages(execution_mode="imports", preliminary=False, account_review=False):
     stages = [{'id':sid, 'provider':provider, 'round':round_, 'mode':('browser' if mode=='import' and execution_mode=='browser' else mode),
              'status':('ready' if execution_mode=='browser' else 'waiting_input') if round_ == 1 else 'pending', 'attempts':0,
              'report':None, 'error':None, 'usage':None, 'note_id':None, 'browser_progress':None,
@@ -63,6 +63,10 @@ def initial_stages(execution_mode="imports", preliminary=False):
             if stage['round']==0:
                 stage['account_profile']='preliminary_merge' if stage['id']=='pre_brief_chatgpt' else 'preliminary_research'
                 stage['depends_on']=[s[0] for s in PRE_STAGES[:3]] if stage['id']=='pre_brief_chatgpt' else []
+    if account_review:
+        for stage in stages:
+            if stage['round'] == 2:
+                stage.update(mode='account', account_profile='research_review')
     return stages
 
 
@@ -121,6 +125,10 @@ def prompt_for(run, stage, packet_format=None, packet=None, preamble=''):
           2: 'Aşağıdaki ortak paketin tamamını inceleyerek web uygulamasının Deep Research modunda tek bir yeniden araştırma yap. Önceki raporları yalnızca özetleme: çelişkili iddiaları, eksik kanıtları ve karşı argümanları yeni kaynaklarla araştır. Önceki sonuçlardan hangilerini doğruladığını veya düzelttiğini açıkla. Kaynak URL’lerini ve önceki raporlara atıfları koru. Erişemediğin kaynakları belirt.',
           3: 'Ortak paketteki tüm araştırmaları bağımsız biçimde sentezle. Kanıt/iddia karşılaştırması, doğrulanan ve çelişen bulgular, seçenekler, güçlü/zayıf yönler, kaynak URL’leri ve çözülmemiş itirazlar içeren kapsamlı bir rapor üret. Araştırma yapmış gibi davranma. Sağlayıcının adından bağımsız olarak kanıt kalitesine göre değerlendir.',
           4: 'İki sentezi ve önceki araştırma kanıtlarını birleştirerek kullanıcıya nihai yanıtı ve gerekçeli kararı ver. Açık bir öneri, kanıt temelli kısa gerekçe, alternatiflerin neden geride kaldığı, belirsizlikler, hangi yeni kanıtın kararı değiştireceği ve kaynak URL’leri bulunsun. Çoğunluk görüşünü doğrulukla eşitleme; aynı kaynağı tekrarlayan raporları bağımsız kanıt sayma.'}[phase]
+    if stage.get('account_profile') == 'research_review':
+        task = ('Ortak kanıtı değişmez parçalar halinde hesap bağlantısıyla yeniden araştır. Her parçada yeni web '
+                'araması ve kaynak okuması yap; yalnızca özetleme. Koşul, istisna, karşı kanıt ve çelişkileri '
+                'koru. Parçalar arası bağımlılıkları son birleştirmede denetle. Tarayıcı arayüzü kullanma.')
     if phase < 4 and run.get('working_report_target_tokens'):
         task += ('\nAra çıktı sözleşmesi: kısa çalışma kayıtları üret; önceki raporları yeniden kopyalama. '
                  'Yeni bulguları, değişen değerlendirmeleri, koşulları, istisnaları, belirsizlikleri ve karşı kanıtları '

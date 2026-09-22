@@ -21,10 +21,12 @@ export function SharedEvidencePacket({packet,onDownload}:{packet:ResearchPacket;
 export function PacketCompaction({audit,preparation}:{audit?:CompactionAudit|null;preparation?:PreparationPlan|null}) {
   const {t}=useTranslation()
   const references=audit?.referenced_blocks??0
+  const review=preparation?.version==='account-review-v1'
+  const progressKeys:Record<string,string>={planned:'reviewPlanned',researching:'reviewResearching',checking_sources:'reviewChecking',reconciling:'reviewReconciling',completed:'reviewCompleted'}
   if(!references&&!preparation)return null
   const number=(value:number)=>value.toLocaleString()
   return <section aria-label={t('research.preparationTitle')} className="mb-3 rounded-xl border border-primary/20 bg-primary/5 p-4">
-    <p className="flex items-center gap-2 text-sm font-medium"><Layers aria-hidden className="size-4 shrink-0"/>{t('research.preparationTitle')}</p>
+    <p className="flex items-center gap-2 text-sm font-medium"><Layers aria-hidden className="size-4 shrink-0"/>{t(review?'research.accountReviewStage':'research.preparationTitle')}</p>
     {references>0&&audit&&<>
       <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t('research.referenceHelp')}</p>
       <p className="mt-2 text-sm tabular-nums">{t('research.referenceSaved',{blocks:number(references),tokens:number(audit.saved_tokens)})}</p>
@@ -32,8 +34,10 @@ export function PacketCompaction({audit,preparation}:{audit?:CompactionAudit|nul
     {preparation&&<>
       <p className="mt-2 text-sm font-medium">{t('research.preparationParts',{parts:number(preparation.parts)})}</p>
       <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t('research.preparationHelp')}</p>
+      {review&&<p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t('research.accountReviewChecks')}</p>}
       <p className="mt-2 text-xs text-muted-foreground">{t('research.preparationCalls',{calls:number(preparation.minimum_calls)})}</p>
-      {preparation.status==='planned'&&<p className="mt-3 text-xs font-medium">{t('research.preparationReady')}</p>}
+      {review&&<p role="status" className="mt-3 text-xs font-medium">{t('research.'+(progressKeys[preparation.status]||'reviewPlanned'))}{preparation.current&&<span className="ml-2 tabular-nums">{preparation.current}</span>}</p>}
+      {!review&&preparation.status==='planned'&&<p className="mt-3 text-xs font-medium">{t('research.preparationReady')}</p>}
       {preparation.completed_calls!==undefined&&<p role="status" className="mt-3 text-xs tabular-nums">{t('research.preparationProgress',{calls:number(preparation.completed_calls)})}</p>}
     </>}
     {audit&&<details className="mt-3 text-xs text-muted-foreground">

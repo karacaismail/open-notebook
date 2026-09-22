@@ -29,6 +29,13 @@
   },
   "settings": [
     {
+      "key": "account_review",
+      "kind": "boolean",
+      "default": true,
+      "label_key": "research.accountReview",
+      "help_key": "research.accountReviewHelp"
+    },
+    {
       "key": "preliminary",
       "kind": "boolean",
       "default": true,
@@ -67,7 +74,8 @@
       "language": "language",
       "auto_synthesize": "auto_synthesize",
       "execution_mode": "execution_mode",
-      "preliminary": "preliminary"
+      "preliminary": "preliminary",
+      "account_review": "account_review"
     }
   }
 }

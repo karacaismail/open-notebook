@@ -48,7 +48,7 @@ export function ResearchWorkflow({ run, selected, onSelect }: { run: ResearchRun
               {done ? <><Check aria-hidden className="size-3 text-emerald-500" />{stage.account_profile === 'preliminary_merge' ? t('research.briefMerge') : stage.provider}</> : <>
                 <span className="flex items-center gap-2"><span aria-hidden className={cn('flex size-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold', providerColor[stage.provider])}>{stage.provider[0]}</span><span className="flex-1 text-sm font-semibold">{stage.account_profile === 'preliminary_merge' ? t('research.briefMerge') : stage.provider}</span><ChevronRight aria-hidden className="size-3.5 text-muted-foreground" /></span>
                 <span className="mt-2 block"><ResearchStatus value={stage.status} /></span>
-                {stage.status === 'running' && <span className="mt-2 flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground"><CircleDot aria-hidden className="mt-0.5 size-3 shrink-0 text-blue-500" />{t(stage.account_profile === 'preliminary_research' ? 'research.agentPreliminary' : stage.mode === 'browser' ? 'research.agentBrowsing' : 'research.agentSynthesizing')}</span>}
+                {stage.status === 'running' && <span className="mt-2 flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground"><CircleDot aria-hidden className="mt-0.5 size-3 shrink-0 text-blue-500" />{t(stage.account_profile === 'research_review' ? 'research.reviewResearching' : stage.account_profile === 'preliminary_research' ? 'research.agentPreliminary' : stage.mode === 'browser' ? 'research.agentBrowsing' : 'research.agentSynthesizing')}</span>}
               </>}
             </button>)}
           </div>

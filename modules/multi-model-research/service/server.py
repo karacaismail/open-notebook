@@ -72,7 +72,7 @@ async def service_error(request,exc):return JSONResponse({'detail':str(exc)},sta
 @app.get('/health')
 async def health():
     browser=BROWSER.runtime if BROWSER else None
-    return {'status':'healthy' if ENGINE else 'loading','research_controls':'v1','stage_controls':'v1','active_synthesis':len(ENGINE.tasks)+len(ENGINE.control_tasks) if ENGINE else 0,
+    return {'status':'healthy' if ENGINE else 'loading','account_review':'v1','research_controls':'v1','stage_controls':'v1','active_synthesis':len(ENGINE.tasks)+len(ENGINE.control_tasks) if ENGINE else 0,
             'pending_exports':len(ENGINE.background) if ENGINE else 0,
             'mode':'browser_research' if BROWSER else 'web_research_imports',
             'browser_transport':getattr(browser,'transport','playwright') if browser else None,
@@ -130,6 +130,7 @@ class RunCreate(BaseModel):
     language:str=Field(default='Türkçe',min_length=2,max_length=60)
     auto_synthesize:bool=True
     preliminary:bool=True
+    account_review:bool=True
     execution_mode:Literal['imports','browser']='imports'
     as_of:date=Field(default_factory=date.today)
     notebook_id:str|None=None
@@ -225,6 +226,11 @@ async def export(run_id:str):
         for stage in run['stages']:
             journal=ENGINE.input_path(run,stage).parent/'segmented-journal.json'
             if journal.is_file():archive.write(journal,stage['id']+'/segmented-journal.json')
+            snapshots=ENGINE.input_path(run,stage).parent/'source-snapshots'
+            if snapshots.is_dir():
+                for snapshot in sorted(snapshots.iterdir()):
+                    if snapshot.is_file() and not snapshot.is_symlink() and re.fullmatch(r'[a-f0-9]{64}\.(json|body)',snapshot.name):
+                        archive.write(snapshot,stage['id']+'/source-snapshots/'+snapshot.name)
             if ready(run,stage):
                 prompt=ENGINE.input_prompt(run,stage)
                 archive.writestr(stage['id']+'/input-packet.md',prompt)

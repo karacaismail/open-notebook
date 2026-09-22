@@ -29,21 +29,29 @@ import { ResearchStopFeedback, ResearchAttentionSummary } from './components/Res
 
 const providerUrls:Record<string,string>={Gemini:'https://gemini.google.com/app',ChatGPT:'https://chatgpt.com/',Claude:'https://claude.ai/new'}
 
-const provenanceKeys:Record<string,string>={account_preliminary_research:'research.preliminary',account_preliminary_brief:'research.briefMerge',browser_deep_research:'research.browser_deep_research',web_deep_research_import:'research.web_deep_research_import',account_synthesis:'research.account_synthesis',manual_synthesis_import:'research.manual_synthesis_import'}
+const provenanceKeys:Record<string,string>={account_research_review:'research.accountReviewStage',account_preliminary_research:'research.preliminary',account_preliminary_brief:'research.briefMerge',browser_deep_research:'research.browser_deep_research',web_deep_research_import:'research.web_deep_research_import',account_synthesis:'research.account_synthesis',manual_synthesis_import:'research.manual_synthesis_import'}
 
 function NewResearch({onCreated}:{onCreated:(id:string)=>void}) {
+  const {t}=useTranslation();const modules=useModules()
+  if(modules.isPending)return <p role="status" className="p-6 text-sm text-muted-foreground">{t('common.loading')}</p>
+  if(modules.isError)return <p role="alert" className="p-6 text-sm">{t('research.error')} <Button variant="outline" onClick={()=>modules.refetch()}>{t('common.retryConnection')}</Button></p>
+  return <ResearchForm onCreated={onCreated} defaults={modules.data?.find(item=>item.id==='multi-model-research')?.settings}/>
+}
+
+function ResearchForm({onCreated,defaults}:{onCreated:(id:string)=>void;defaults?:Record<string,unknown>}) {
   const {t}=useTranslation();const {create}=useResearchActions()
-  const {data:modules}=useModules();const defaults=modules?.find(item=>item.id==='multi-model-research')?.settings
   const [preliminary,setPreliminary]=useState(defaults?.preliminary!==false)
+  const [accountReview,setAccountReview]=useState(defaults?.account_review!==false)
   const [question,setQuestion]=useState('');const [scope,setScope]=useState('');const [language,setLanguage]=useState(String(defaults?.language??'Türkçe'));const [auto,setAuto]=useState(defaults?.auto_synthesize!==false)
   const [asOf,setAsOf]=useState(()=>new Date().toLocaleDateString('sv-SE'));const [mode,setMode]=useState<ExecutionMode>(defaults?.execution_mode==='imports'?'imports':'browser')
   const request=useRef<{signature:string;key:string}|null>(null)
-  return <form className="space-y-5 rounded-xl border bg-card p-6" onSubmit={async event=>{event.preventDefault();try{const body={preliminary,question,scope,language,as_of:asOf,auto_synthesize:auto,execution_mode:mode};const signature=JSON.stringify(body);if(request.current?.signature!==signature)request.current={signature,key:crypto.randomUUID()};const run=await create.mutateAsync({body,key:request.current.key});onCreated(run.id)}catch { /* Mutation errors are displayed by the hook. */ }}}>
+  return <form className="space-y-5 rounded-xl border bg-card p-6" onSubmit={async event=>{event.preventDefault();try{const body={preliminary,account_review:accountReview,question,scope,language,as_of:asOf,auto_synthesize:auto,execution_mode:mode};const signature=JSON.stringify(body);if(request.current?.signature!==signature)request.current={signature,key:crypto.randomUUID()};const run=await create.mutateAsync({body,key:request.current.key});onCreated(run.id)}catch { /* Mutation errors are displayed by the hook. */ }}}>
     <label className="flex items-start gap-3 rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 text-sm"><input type="checkbox" checked={preliminary} onChange={e=>setPreliminary(e.target.checked)} className="mt-1 accent-blue-600"/><span><strong>{t('research.preliminary')}</strong><span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{t('research.preliminaryHelp')}</span></span></label>
     {preliminary&&<PreliminaryAccounts/>}
+    <label className="flex items-start gap-3 rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm"><input type="checkbox" checked={accountReview} onChange={e=>setAccountReview(e.target.checked)} className="mt-1 accent-blue-600"/><span><strong>{t('research.accountReview')}</strong><span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{t('research.accountReviewHelp')}</span></span></label>
     <fieldset className="space-y-3"><legend className="mb-2 text-sm font-medium">{t('research.flow')}</legend>
-      {([['browser',t('research.automaticMode'),t('research.automaticModeHelp')],
-         ['imports',t('research.importMode'),t('research.importModeHelp')]] as const).map(([value,label,help])=>
+      {([['browser',t('research.automaticMode'),t(accountReview?'research.reviewAutomaticHelp':'research.automaticModeHelp')],
+         ['imports',t('research.importMode'),t(accountReview?'research.reviewImportHelp':'research.importModeHelp')]] as const).map(([value,label,help])=>
         <label key={value} className={cn('flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm transition-colors',mode===value?'border-primary bg-primary/5':'border-border hover:bg-accent')}>
           <input type="radio" name="execution-mode" value={value} checked={mode===value} onChange={()=>setMode(value)} className="mt-1 accent-blue-600"/>
           <span><span className="font-medium">{label}</span><span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{help}</span></span>
@@ -108,7 +116,7 @@ function StageDetail({run,stage}:{run:ResearchRun;stage:ResearchStage}) {
       </div>:<div className="space-y-5">
         {stage.mode==='browser'&&stage.browser_progress&&<div className="rounded-lg border bg-muted/40 p-3 text-sm"><p className="flex items-center gap-2">{stage.status==='running'&&<Loader2 className="size-4 animate-spin"/>}{stage.status==='running'?stage.browser_progress.message:t('research.lastBrowserProgress',{message:stage.browser_progress.message})}</p>{stage.browser_progress.url&&<a href={stage.browser_progress.url} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex items-center text-xs text-blue-500 hover:underline">{t('research.openConversation')}<ArrowUpRight className="ml-1 size-3"/></a>}</div>}
         {stage.mode==='browser'&&attentionStates.includes(stage.status)&&<p role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm">{t('research.attentionNeeded')}</p>}
-        <div className="space-y-3"><h3 className="text-sm font-semibold">{stage.round===0?t('research.round0'):stage.mode==='import'?t('research.step1'):stage.mode==='browser'?t('research.browserStageTitle'):t('research.accountMode')}</h3><p className="text-sm leading-relaxed text-muted-foreground">{stage.round===0?t('research.preliminaryHelp'):stage.mode==='import'?t('research.step1Help'):stage.mode==='browser'?t('research.browserStageHelp'):t('research.automatic')}</p>
+        <div className="space-y-3"><h3 className="text-sm font-semibold">{stage.account_profile==='research_review'?t('research.accountReviewStage'):stage.round===0?t('research.round0'):stage.mode==='import'?t('research.step1'):stage.mode==='browser'?t('research.browserStageTitle'):t('research.accountMode')}</h3><p className="text-sm leading-relaxed text-muted-foreground">{stage.account_profile==='research_review'?t('research.accountReviewChecks'):stage.round===0?t('research.preliminaryHelp'):stage.mode==='import'?t('research.step1Help'):stage.mode==='browser'?t('research.browserStageHelp'):t('research.automatic')}</p>
           <div className="flex flex-wrap gap-2"><Button asChild variant="outline" size="sm"><a href={providerUrls[stage.provider]} target="_blank" rel="noopener noreferrer">{t('research.openProvider',{provider:stage.provider})}<ArrowUpRight className="ml-2 size-4"/></a></Button>
             <Button variant="outline" size="sm" disabled={!packet.data} onClick={async()=>{try{await navigator.clipboard.writeText(packet.data!.prompt);toast.success(t('research.copied'))}catch(err){error(err)}}}><Copy className="mr-2 size-4"/>{t('research.copyPrompt')}</Button>
             <Button variant="outline" size="sm" disabled={!packet.data} onClick={()=>downloadResearchFile(packet.data!.prompt,stage.id+'-input.md')}><Download className="mr-2 size-4"/>{t('research.downloadPacket')}</Button>

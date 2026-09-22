@@ -219,7 +219,7 @@ def prepare_prompt(body):
 def run_cli(model, prompt, profile='default', selection=None):
     provider = MODELS[model]['provider']
     if provider == 'gemini':
-        agent_name = 'notebook-preliminary' if profile == 'preliminary_research' else 'notebook-text'
+        agent_name = 'notebook-preliminary' if profile in ('preliminary_research','research_review') else 'notebook-text'
         # AGY silently falls back to its general-purpose agent when a persona is
         # missing. Refuse that fallback so notebook requests keep the text profile.
         try:
@@ -339,8 +339,12 @@ def run_cli(model, prompt, profile='default', selection=None):
         raise BridgeError('The account CLI could not produce a response. Check its login and retry.', 502)
     if profile in PROFILES:
         usage['research_trace'] = tool_trace
-        if profile == 'preliminary_research' and (not tool_trace.get('searched') or not tool_trace.get('read_sources') or tool_trace.get('unexpected_tools')):
-            raise BridgeError('Ön araştırmada web aracı kullanımı doğrulanamadı. Model çıktısı araştırma olarak kabul edilmedi.', 422)
+        if profile in ('preliminary_research','research_review') and (not tool_trace.get('searched') or not tool_trace.get('read_sources') or tool_trace.get('unexpected_tools')):
+            missing=[]
+            if not tool_trace.get('searched'):missing.append('no confirmed web search')
+            if not tool_trace.get('read_sources'):missing.append('no confirmed source read')
+            if tool_trace.get('unexpected_tools'):missing.append('unexpected tool activity')
+            raise BridgeError('Fresh web research was not confirmed: '+', '.join(missing)+'. The output was not accepted as research.', 422)
     if usage:
         usage.setdefault('prompt_tokens',0);usage.setdefault('completion_tokens',0)
         usage['total_tokens'] = usage['prompt_tokens'] + usage['completion_tokens']

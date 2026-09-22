@@ -121,7 +121,7 @@ def audit_report(run, stage):
                     raise ValueError('Destekleniyor değerlendirmesinde kaynak yok.')
                 if raw['status'] == 'rejected' and (not counter or not raw['counter_evidence'].strip()):
                     raise ValueError('Ret için somut karşı kanıt ve karşı kaynak eksik.')
-                if stage['mode'] == 'account' and (set(sources + counter) - known_urls):
+                if stage['mode'] == 'account' and stage.get('account_profile') not in ('preliminary_research','research_review') and (set(sources + counter) - known_urls):
                     raise ValueError('Araçsız sentez, girdi paketinde olmayan kaynak ekledi.')
                 old_sources = known.get(ident, {}).get('sources', [])
                 result['assessments'].append({k: raw[k] for k in ('id','statement','status','reason','counter_evidence','limits')}
