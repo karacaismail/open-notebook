@@ -57,3 +57,5 @@ What this makes easier, what it makes harder, what to watch. (bullets)
 - [ADR-010: Lossless research packets](ADR-010-lossless-research-packets.md) — full evidence, explicit account transport and input-budget forecasts.
 
 - [ADR-011: Research ECA rules and measured token accounting](ADR-011-research-eca-rules.md)
+- [ADR-012: Optional local hybrid search](ADR-012-hybrid-search.md)
+- [ADR-013: Verified evidence preparation](ADR-013-evidence-preparation.md) — reversible references, exhaustive input partitions and durable account synthesis.

@@ -7,7 +7,7 @@ import { ResearchQuestionCard } from './ResearchQuestionCard'
 import { ResearchWorkflow } from './ResearchWorkflow'
 import { ResearchAttentionSummary, ResearchStopFeedback } from './ResearchStopFeedback'
 import { ResearchPolicyPanel } from './ResearchPolicyPanel'
-import { ContextBudgetRows, PacketBudget, SharedEvidencePacket } from './ResearchContextBudget'
+import { ContextBudgetRows, PacketBudget, PacketCompaction, SharedEvidencePacket } from './ResearchContextBudget'
 
 vi.mock('@/lib/hooks/use-translation', () => ({ useTranslation: () => ({ language: 'en-US', t: (key: string, values: Record<string, unknown> = {}) => {
   const value = key === 'common.close' ? 'Close' : researchEn[key.replace('research.', '') as keyof typeof researchEn] || key
@@ -40,6 +40,29 @@ describe('Input budget transparency',()=>{
     expect(screen.getByText('Raw packet tokens (o200k_base)')).toBeInTheDocument()
     expect(screen.getByText('Raw CLI input tokens')).toBeInTheDocument()
     expect(screen.getByText(/not an exact provider-tokenizer measurement/)).toBeInTheDocument()
+  })
+})
+
+const AUDIT={before_tokens:182202,after_tokens:180304,saved_tokens:1898,removed_sentences:0,
+  referenced_blocks:12,candidates:12,round_raw_limit:114927,fits:false,marker:'reference',
+  by_reason:{exact_reference:325},by_stage:{}}
+
+describe('Evidence preparation is explicit',()=>{
+  it('describes in-band references without claiming deleted prose is lossless',()=>{
+    render(<PacketCompaction audit={AUDIT}/> )
+    expect(screen.getByText('Evidence preparation')).toBeInTheDocument()
+    expect(screen.getByText(/No unique sentence is removed/)).toBeInTheDocument()
+    expect(screen.getByText('12 shared blocks · 1,898 tokens saved')).toBeInTheDocument()
+  })
+  it('shows the complete multi-pass plan, quota impact and semantic limitation',()=>{
+    render(<PacketCompaction preparation={{version:'v1',parts:4,minimum_calls:5,source_bytes:100,source_sha256:'hash',coverage_verified:true,semantic_lossless:false,status:'planned'}}/> )
+    expect(screen.getByText('Read the complete evidence in 4 parts')).toBeInTheDocument()
+    expect(screen.getByText(/byte coverage does not guarantee/)).toBeInTheDocument()
+    expect(screen.getByText(/At least 5 account calls/)).toBeInTheDocument()
+  })
+  it('hides an unused preparation panel',()=>{
+    const {container}=render(<PacketCompaction audit={null}/> )
+    expect(container).toBeEmptyDOMElement()
   })
 })
 

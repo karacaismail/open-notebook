@@ -118,7 +118,7 @@ async def test_early_forecast_is_not_a_submission_and_pending_packet_remains_blo
     engine.token_limit=10000
     r=await create(engine,False)
     for s in r['stages'][:4]:await add(engine,r['id'],s['id'])
-    assert (await engine.context_plan(r['id']))['stages']==[]
+    assert all(row['projection'] for row in (await engine.context_plan(r['id']))['stages'])
     await add(engine,r['id'],'review_claude')
     plan=await engine.context_plan(r['id'])
     assert len(plan['stages'])==3

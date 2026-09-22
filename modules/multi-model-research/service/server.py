@@ -51,7 +51,7 @@ async def lifespan(app):
     else:
         runtime=BrowserRuntime(STATE_ROOT.parent)
         BROWSER=BrowserResearch(runtime,STATE_ROOT,timeout=CONFIG.get('browser_timeout_seconds',7200))
-    ENGINE=Engine(store,AccountProvider(Path(CONFIG['bridge_key_path']),CONFIG.get('account_timeout_seconds',3900)),NotebookSink(CONFIG.get('notebook_password','')),counter,CONFIG.get('max_input_tokens',90000),browser=BROWSER,budget=budget,input_limits=CONFIG.get('provider_input_limits'))
+    ENGINE=Engine(store,AccountProvider(Path(CONFIG['bridge_key_path']),CONFIG.get('account_timeout_seconds',3900)),NotebookSink(CONFIG.get('notebook_password','')),counter,CONFIG.get('max_input_tokens',90000),browser=BROWSER,budget=budget,input_limits=CONFIG.get('provider_input_limits'),compaction=CONFIG.get('context_compaction',True),compaction_headroom=CONFIG.get('compaction_headroom',.05),segmented=CONFIG.get('segmented_synthesis',True))
     await ENGINE.recover()
     yield
     await ENGINE.close();await store.close()
@@ -223,6 +223,8 @@ async def export(run_id:str):
         if run.get('prompt_version',1)>=VERSION:
             archive.writestr('evidence-register.json',json.dumps(register(run['stages']),ensure_ascii=False,indent=2))
         for stage in run['stages']:
+            journal=ENGINE.input_path(run,stage).parent/'segmented-journal.json'
+            if journal.is_file():archive.write(journal,stage['id']+'/segmented-journal.json')
             if ready(run,stage):
                 prompt=ENGINE.input_prompt(run,stage)
                 archive.writestr(stage['id']+'/input-packet.md',prompt)

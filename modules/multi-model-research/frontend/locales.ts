@@ -101,6 +101,16 @@ export const researchEn = {
   budgetMargin: "Provider margin + overhead",
   budgetEffective: "Effective raw CLI ceiling",
   budgetRemaining: "Remaining counted tokens",
+
+  preparationTitle: "Evidence preparation",
+  referenceHelp: "Exact repetitions use a shared dictionary included in the input. No unique sentence is removed. Exact reconstruction is verified before submission.",
+  referenceSaved: "{{blocks}} shared blocks · {{tokens}} tokens saved",
+  preparationParts: "Read the complete evidence in {{parts}} parts",
+  preparationHelp: "Every source byte is included in the ordered parts. Each request is checked against its input budget. Intermediate findings are synthesized, so byte coverage does not guarantee that every meaning is retained. Original reports remain available.",
+  preparationCalls: "At least {{calls}} account calls; additional consolidation may be needed. Account quotas apply.",
+  preparationReady: "A continuation plan is ready. Continue this stage to begin.",
+  preparationProgress: "{{calls}} calls completed and saved",
+  compactionSize: "Packet size",
   budgetEstimateNote: "This is a local admission estimate, not an exact provider-tokenizer measurement. No report or evidence is shortened. It does not guarantee the provider will accept the request.",
 
   stopReason: "Why this stage stopped",
@@ -264,6 +274,16 @@ export const researchTr: typeof researchEn = {
   budgetMargin: "Sağlayıcı marjı + ek pay",
   budgetEffective: "Fiilî ham CLI tavanı",
   budgetRemaining: "Kalan sayılan token",
+
+  preparationTitle: "Kanıt hazırlığı",
+  referenceHelp: "Birebir tekrarlar, girdiye dahil edilen ortak sözlükle temsil edilir. Benzersiz cümle silinmez. Gönderimden önce birebir geri kurma doğrulanır.",
+  referenceSaved: "{{blocks}} ortak blok · {{tokens}} token tasarrufu",
+  preparationParts: "Tam kanıtı {{parts}} parçada oku",
+  preparationHelp: "Kaynakların her baytı sıralı parçalara dahil edilir. Her istek girdi bütçesine göre denetlenir. Ara bulgular sentezlendiği için bayt kapsamı, bütün anlamın korunduğunu garanti etmez. Özgün raporlar erişilebilir kalır.",
+  preparationCalls: "En az {{calls}} hesap çağrısı; ek birleştirme gerekebilir. Hesap kotaları geçerlidir.",
+  preparationReady: "Devam planı hazır. Başlamak için bu aşamayı devam ettirin.",
+  preparationProgress: "{{calls}} çağrı tamamlandı ve kaydedildi",
+  compactionSize: "Paket boyutu",
   budgetEstimateNote: "Bu, sağlayıcının kesin tokenizer ölçümü değil, yerel gönderim tahminidir. Rapor veya kanıt kısaltılmaz. Sağlayıcının isteği kabul edeceği garantisi değildir.",
 
   stopReason: "Bu aşama neden durdu?",

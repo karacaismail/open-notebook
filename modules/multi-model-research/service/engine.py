@@ -8,9 +8,13 @@ import httpx
 from browser_runtime import BrowserAttention
 from datetime import datetime, timedelta, timezone
 from workflow import ATTENTION, AUTO_RETRY, RETRY_BACKOFF, SYSTEM, ancestors, citations, digest, initial_stages, now, prompt_for, ready, refresh_status, report_packet
+import math
 from evidence_protocol import VERSION, audit_report, audit_appendix
-from packet_markdown import FORMAT, evidence_identity
-from token_budget import MARKDOWN_TRANSPORT
+from packet_markdown import FORMAT, evidence_identity, evidence_body, markdown_packet
+from token_budget import MARKDOWN_TRANSPORT, Margin, account_input
+from context_compaction import compact_packet, expand_prompt
+from context_preparation import PreparationError
+import segmented_execution
 from research_rules import ResearchRules
 from stage_controls import StageControls
 
@@ -105,10 +109,15 @@ class NotebookSink:
         return value['id']
 
 class Engine(StageControls):
-    def __init__(self,store,provider,sink,token_counter,token_limit=90000,browser=None,budget=None,input_limits=None):
+    def __init__(self,store,provider,sink,token_counter,token_limit=90000,browser=None,budget=None,input_limits=None,
+                 compaction=True,compaction_headroom=.05,segmented=True):
         self.store=store;self.provider=provider;self.sink=sink;self.browser=browser
         self.token_counter=token_counter;self.token_limit=token_limit
         self.budget=budget
+        self.compaction=compaction
+        self.segmented=segmented
+        if not 0<=compaction_headroom<1:raise ValueError('Compaction headroom must be a fraction below one.')
+        self.compaction_headroom=compaction_headroom
         self.input_limits=dict(input_limits or {})
         for provider,limit in self.input_limits.items():
             if provider not in ('ChatGPT','Claude') or type(limit) is not int or limit<=0:
@@ -134,6 +143,10 @@ class Engine(StageControls):
                     # Sent packets, completed imports and browser submission journals stay pinned.
                     if s['mode']=='account' and not s['attempts'] and s['status'] not in ('completed','running','submission_uncertain'):
                         s.update(packet_format=FORMAT,account_input_format=MARKDOWN_TRANSPORT)
+                    # A packet that was prepared and then blocked was never given to a model,
+                    # so it must not make its peers look like they were sent different evidence.
+                    if not s['attempts'] and s.get('evidence_packet'):
+                        s['evidence_packet']=None
                     # A browser job survives both a crash and an orderly shutdown: its journal
                     # is reconciled against the provider before anything is ever re-sent.
                     if s['mode']=='browser' and s['status'] in ('running','interrupted') and self.browser and self.browser.can_resume(run['id'],s['id']):
@@ -165,7 +178,7 @@ class Engine(StageControls):
                 if old['request_fingerprint']!=fingerprint:raise ServiceError('Aynı istek kimliği farklı bir soru için kullanılamaz.',409)
                 return old
             run={'id':uuid.uuid4().hex,'idempotency_key':key,'request_fingerprint':fingerprint,
-                 **data,'prompt_version':VERSION,'packet_format':FORMAT,'created_at':now(),'updated_at':now(),'paused':False,'status':'waiting_input',
+                 **data,'working_report_target_tokens':8000,'prompt_version':VERSION,'packet_format':FORMAT,'created_at':now(),'updated_at':now(),'paused':False,'status':'waiting_input',
                  'notebook_id':data.get('notebook_id'),'sync_error':None,'stages':initial_stages(data.get('execution_mode','imports'),data.get('preliminary',False))}
             for s in run['stages']:
                 if s['mode']=='account':s['account_input_format']=MARKDOWN_TRANSPORT
@@ -177,15 +190,18 @@ class Engine(StageControls):
     async def packet(self,run_id,stage_id):
         run=await self.get(run_id);stage=self.stage(run,stage_id)
         if not ready(run,stage):raise ServiceError('Önceki tur tamamlanmadan bu paketi oluşturamazsınız.',409)
-        prompt=self.input_prompt(run,stage)
+        prompt,compaction=await asyncio.to_thread(self.prepared,run,stage)
         budget=await asyncio.to_thread(self.measure_input,prompt,stage)
         identity=self.evidence_id(prompt)
         # Historical exports are not new submission candidates. Recorded policy
         # remains on the stage; do not display a new blocking decision on completed work.
         policy={} if stage['status']=='completed' else {'policy':await asyncio.to_thread(self.check_packet,run,stage,budget)}
-        if policy:self.check_shared(run,stage,policy['policy'],identity)
+        if policy:
+            self.check_shared(run,stage,policy['policy'],identity)
+            preparation=await asyncio.to_thread(self.preparation_plan,run,stage,prompt,policy['policy'])
+        else:preparation=stage.get('preparation')
         return {'prompt':prompt,'sha256':digest(prompt),'evidence_packet':identity,**budget,**policy,
-                'report_count':len(ancestors(run,stage))}
+                'compaction':compaction,'preparation':preparation,'report_count':len(ancestors(run,stage))}
 
     @staticmethod
     def evidence_id(prompt):
@@ -194,7 +210,7 @@ class Engine(StageControls):
 
     @staticmethod
     def check_shared(run,stage,policy,identity):
-        peers=[s for s in run['stages'] if s['round']==stage['round'] and s['id']!=stage['id'] and s.get('evidence_packet') and s.get('account_profile')==stage.get('account_profile')]
+        peers=[s for s in run['stages'] if s['round']==stage['round'] and s['id']!=stage['id'] and s.get('evidence_packet') and (s['attempts'] or s['status']=='completed') and s.get('account_profile')==stage.get('account_profile')]
         mismatches=[s['id'] for s in peers if s['evidence_packet']!=identity]
         policy['rules_evaluated']+=1
         if mismatches:
@@ -246,8 +262,6 @@ class Engine(StageControls):
     async def context_plan(self,run_id):
         run=await self.get(run_id)
         if not self.budget:return {'stages':[]}
-        if not all(s['status']=='completed' for s in run['stages'] if s['round']<=2):
-            return {'stages':[]}
         signature=digest(json.dumps([(s['id'],s['status'],s.get('input_sha256'),s.get('packet_format'),
                      s.get('account_input_format'),(s.get('report') or {}).get('sha256')) for s in run['stages']]))
         if (run_id,signature) in self.plan_cache:return self.plan_cache[(run_id,signature)]
@@ -266,9 +280,11 @@ class Engine(StageControls):
                     prompt=self.input_prompt(run,stage)
                 else:
                     # A projection only: never submit this incomplete reference packet.
+                    # It still goes through the gate, or the warning would describe a packet
+                    # the service would never send.
                     projected=copy.deepcopy(run)
                     projected['stages']=[s for s in projected['stages'] if s['status']=='completed' or s['id']==stage['id']]
-                    prompt=prompt_for(projected,stage)
+                    prompt=self.prepared(projected,stage,peers=run)[0]
                 measured=self.measure_input(prompt,stage)
                 reserve=sum(self.budget.output_tokens_by_round.get(s['round'],32000) for s in missing)
                 estimated=self.budget.from_counts(measured['raw_tokens']+reserve,
@@ -285,19 +301,82 @@ class Engine(StageControls):
         return {'stages':rows}
     def input_path(self,run,stage):
         return self.store.root/'artifacts'/run['id']/stage['id']/'input-packet.md'
-    def input_prompt(self,run,stage):
+
+    def stage_raw_limit(self,stage):
+        limit=self.input_limits.get(stage['provider'],self.token_limit)
+        if stage.get('account_profile'):
+            limit=min(limit,120000); margin=Margin()
+        else:margin=self.budget.margins.get(stage['provider'],Margin())
+        return max(0,math.floor((limit-margin.overhead_tokens)/margin.multiplier))
+
+    def round_raw_limit(self,run,stage,peers=None):
+        members=[s for s in (peers or run)['stages'] if s['round']==stage['round']
+                 and s.get('account_profile')==stage.get('account_profile')]
+        return min(self.stage_raw_limit(s) for s in (members or [stage]))
+
+    def prepared(self,run,stage,peers=None):
+        saved=self.frozen_prompt(run,stage)
+        if saved is not None:return saved,stage.get('compaction')
+        try:packet=report_packet(run,stage)
+        except ValueError as exc:raise ServiceError(str(exc),409,kind='integrity_error') from exc
+        prompt=prompt_for(run,stage,packet=packet)
+        selected_format=stage.get('packet_format') or run.get('packet_format')
+        if not (self.compaction and self.budget and stage['mode']=='account'
+                and selected_format==FORMAT):return prompt,None
+        # Compress only the shared evidence. Decision and bytes are independent of
+        # which peer asks first; all peer instructions/transport costs are measured.
+        members=[s for s in (peers or run)['stages'] if s['round']==stage['round']
+                 and s.get('account_profile')==stage.get('account_profile')] or [stage]
+        prefixes=[(s,prompt_for(run,s,packet=packet).split('BEGIN_REFERENCE_',1)[0]) for s in members]
+        def measure(body):
+            return max(self.budget.counter(account_input(system_for(s),prefix+body,
+                       s.get('account_input_format','json-v1'))) for s,prefix in prefixes)
+        target=math.floor(self.round_raw_limit(run,stage,peers)*(1-self.compaction_headroom))
+        result=compact_packet(packet,target,measure)
+        body,_=evidence_body(prompt)
+        value=prompt[:-len(body)]+result['prompt']
+        if expand_prompt(value)!=prompt:
+            raise ServiceError('Prepared evidence failed exact reconstruction.',409,kind='integrity_error')
+        audit=dict(result['audit'],fits=result['fits'],round_raw_limit=target)
+        return value,(audit if audit['before_tokens']>target else None)
+
+    def preparation_plan(self,run,stage,prompt,policy):
+        if stage['attempts'] and not stage.get('preparation'):return None
+        if not (self.segmented and self.budget and stage['mode']=='account'
+                and stage.get('account_profile')!='preliminary_research'
+                and policy.get('block_status')=='context_limit'
+                and self.evidence_id(prompt)['format']=='markdown'):
+            return stage.get('preparation') if stage['attempts'] else None
+        try:
+            plan=segmented_execution.plan_for(self,run,stage,prompt)
+        except (PreparationError,ValueError) as exc:
+            policy['findings'].append({'id':'ECA-020','action':'block_submission','severity':'error',
+                'message':str(exc),'evidence':{'preparation_failed':True}})
+            return None
+        policy.update(blocked=False,block_status=None)
+        policy['findings']=[f for f in policy['findings'] if f['id']!='ECA-011']
+        policy['findings'].append({'id':'ECA-019','action':'prepare_segments','severity':'warning',
+            'message':'The complete evidence will be processed in verified parts. Intermediate findings are not lossless copies of the sources.',
+            'evidence':segmented_execution.summary(plan)})
+        return segmented_execution.summary(plan)
+
+    def frozen_prompt(self,run,stage):
         path=self.input_path(run,stage)
         if stage['attempts'] and path.is_file():
             text=path.read_bytes().decode('utf-8')
             if digest(text)!=stage['input_sha256']:
                 raise ServiceError('Kaydedilmiş girdi paketi özeti uyuşmuyor; istek yeniden gönderilmedi.',409)
+            try:
+                if (stage.get('compaction') or {}).get('version')=='lossless-references-v1':expand_prompt(text)
+            except (ValueError,KeyError,TypeError) as exc:
+                raise ServiceError('Saved reference dictionary is invalid.',409,kind='integrity_error') from exc
             return text
         if stage['attempts'] and stage.get('input_sha256'):
             raise ServiceError('Gönderilmiş girdi paketi bulunamadı; değiştirilmiş bir paketle yeniden gönderilmedi.',409)
-        try:
-            return prompt_for(run,stage)
-        except ValueError as exc:
-            raise ServiceError(str(exc),409) from exc
+        return None
+
+    def input_prompt(self,run,stage):
+        return self.prepared(run,stage)[0]
 
     def audit(self, run, stage):
         if run.get('prompt_version',1) >= VERSION:
@@ -360,7 +439,8 @@ class Engine(StageControls):
                 # is already ready is part of the single-question flow, not an optional extra.
                 if stage['mode']=='account' and stage['round']>=3 and not run['auto_synthesize']:continue
                 try:
-                    prompt=self.input_prompt(run,stage)
+                    prompt,compaction=await asyncio.to_thread(self.prepared,run,stage)
+                    stage['compaction']=compaction
                     identity=self.evidence_id(prompt)
                 except ServiceError as exc:
                     policy={'version':'research-eca-v1','event':'before_submit','rules_evaluated':1,
@@ -375,11 +455,14 @@ class Engine(StageControls):
                 stage['input_budget']=measured
                 policy=await asyncio.to_thread(self.check_packet,run,stage,measured,'before_submit')
                 self.check_shared(run,stage,policy,identity)
-                stage['evidence_packet']=identity
+                stage['preparation']=await asyncio.to_thread(self.preparation_plan,run,stage,prompt,policy)
                 self.record_policy(stage,policy,digest(prompt))
                 if policy['blocked']:
+                    # The identity is recorded below, only once the packet is really sent:
+                    # clearing it here would also erase a genuine earlier submission.
                     reasons=' '.join(f['message'] for f in policy['findings'] if f['action']=='block_submission')
                     stage.update(status=policy['block_status'],next_retry_at=None,error=reasons+f' Girdi: {count:,}; sınır: {measured["automatic_input_limit"]:,}.');continue
+                stage['evidence_packet']=identity
                 path=self.input_path(run,stage);path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
                 temporary=path.with_suffix('.tmp');temporary.touch(mode=0o600)
                 temporary.write_text(prompt);temporary.replace(path)
@@ -388,6 +471,7 @@ class Engine(StageControls):
             refresh_status(run);await self.store.save(run)
             for stage_id,prompt in launches:
                 task=asyncio.create_task(self.execute(run_id,stage_id,prompt));self.tasks[(run_id,stage_id)]=task
+                task.add_done_callback(lambda done,key=(run_id,stage_id): self.tasks.pop(key,None) if self.tasks.get(key) is done else None)
     async def browser_progress(self,run_id,stage_id,progress):
         async with self.lock:
             run=await self.get(run_id);stage=self.stage(run,stage_id)
@@ -416,7 +500,10 @@ class Engine(StageControls):
                         if latest.get('control_state') or current.get('control_state'):return
                         current['request_dispatched']=True
                         await self.store.save(latest)
-                    text,usage=await self.provider.synthesize(stage,prompt)
+                    if stage.get('preparation'):
+                        text,usage=await segmented_execution.execute(self,run,stage,prompt)
+                    else:
+                        text,usage=await self.provider.synthesize(stage,prompt)
             async with self.lock:
                 run=await self.get(run_id);stage=self.stage(run,stage_id)
                 stage.update(status='completed',control_state=None,control_error=None,finished_at=now(),usage=usage,error=None,
@@ -449,7 +536,6 @@ class Engine(StageControls):
                 if not run.get('control_state') and not stage.get('control_state'):self.arm_retry(stage)
                 else:stage['next_retry_at']=None
                 refresh_status(run);await self.store.save(run)
-        finally:self.tasks.pop((run_id,stage_id),None)
         await self.kick(run_id);self.schedule_sync(run_id)
     def browser_files(self,run_id,stage_id):
         """Job-log paths relative to the state root, so export and backup can find them."""
@@ -536,6 +622,7 @@ class Engine(StageControls):
             if task:
                 task.cancel()
                 await asyncio.gather(task,return_exceptions=True)
+            await segmented_execution.confirm_cancel(self,run,stage)
         async with self.lock:
             run=await self.get(run_id)
             for stage in run['stages']:

@@ -1,10 +1,10 @@
 'use client'
 
-import { AlertTriangle, Gauge, Files, Download } from 'lucide-react'
+import { AlertTriangle, Gauge, Files, Download, Layers } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/lib/hooks/use-translation'
 import { useContextPlan } from '@/modules/multi-model-research/hooks'
-import { ContextPlanRow, ResearchPacket, ResearchRun } from '@/modules/multi-model-research/api'
+import { CompactionAudit, PreparationPlan, ContextPlanRow, ResearchPacket, ResearchRun } from '@/modules/multi-model-research/api'
 
 export function SharedEvidencePacket({packet,onDownload}:{packet:ResearchPacket;onDownload:()=>void}) {
   const {t}=useTranslation()
@@ -16,6 +16,31 @@ export function SharedEvidencePacket({packet,onDownload}:{packet:ResearchPacket;
     <div className="mt-3 flex flex-wrap items-center justify-between gap-2"><span className="text-xs text-muted-foreground">{t('research.sharedPacketBytes',{bytes:shared.bytes.toLocaleString()})}</span><Button size="sm" variant="outline" onClick={onDownload}><Download aria-hidden className="mr-2 size-3.5"/>{t('research.sharedPacketDownload')}</Button></div>
     <details className="mt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">{t('research.sharedPacketHash')}</summary><code className="mt-2 block break-all">{shared.sha256}</code></details>
   </div>
+}
+
+export function PacketCompaction({audit,preparation}:{audit?:CompactionAudit|null;preparation?:PreparationPlan|null}) {
+  const {t}=useTranslation()
+  const references=audit?.referenced_blocks??0
+  if(!references&&!preparation)return null
+  const number=(value:number)=>value.toLocaleString()
+  return <section aria-label={t('research.preparationTitle')} className="mb-3 rounded-xl border border-primary/20 bg-primary/5 p-4">
+    <p className="flex items-center gap-2 text-sm font-medium"><Layers aria-hidden className="size-4 shrink-0"/>{t('research.preparationTitle')}</p>
+    {references>0&&audit&&<>
+      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t('research.referenceHelp')}</p>
+      <p className="mt-2 text-sm tabular-nums">{t('research.referenceSaved',{blocks:number(references),tokens:number(audit.saved_tokens)})}</p>
+    </>}
+    {preparation&&<>
+      <p className="mt-2 text-sm font-medium">{t('research.preparationParts',{parts:number(preparation.parts)})}</p>
+      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t('research.preparationHelp')}</p>
+      <p className="mt-2 text-xs text-muted-foreground">{t('research.preparationCalls',{calls:number(preparation.minimum_calls)})}</p>
+      {preparation.status==='planned'&&<p className="mt-3 text-xs font-medium">{t('research.preparationReady')}</p>}
+      {preparation.completed_calls!==undefined&&<p role="status" className="mt-3 text-xs tabular-nums">{t('research.preparationProgress',{calls:number(preparation.completed_calls)})}</p>}
+    </>}
+    {audit&&<details className="mt-3 text-xs text-muted-foreground">
+      <summary className="cursor-pointer">{t('research.compactionSize')}</summary>
+      <p className="mt-2 tabular-nums">{number(audit.before_tokens)} → {number(audit.after_tokens)}</p>
+    </details>}
+  </section>
 }
 
 export function PacketBudget({packet}:{packet:ResearchPacket}) {
@@ -61,7 +86,7 @@ export function ContextBudgetRows({rows,onSelect}:{rows:ContextPlanRow[];onSelec
 
 export function ResearchContextBudget({run,onSelect}:{run:ResearchRun;onSelect:(stage:string)=>void}) {
   const {t}=useTranslation()
-  const enabled=run.status!=='completed'&&run.stages.filter(s=>s.round<=2).every(s=>s.status==='completed')
+  const enabled=run.status!=='completed'
   const plan=useContextPlan(run.id,enabled)
   if(!enabled)return null
   if(plan.isError)return <p role="status" className="rounded-lg border p-3 text-sm text-muted-foreground">{t('research.budgetUnavailable')}</p>

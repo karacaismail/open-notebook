@@ -60,6 +60,10 @@ credentials and voice reference recordings are not included in the repository.
 - Replace unnecessary JSON transport overhead with lossless Markdown, add explicit
   context-budget checks, and apply event-condition-action rules for duplicates,
   evidence preservation and submission safety.
+- Prepare oversized account inputs with reversible in-band references and
+  deterministic source partitions shared by same-round peers. Preserve the full
+  claim register in consolidation, checkpoint each subrequest, and distinguish
+  verified byte coverage from the semantic limitations of generated findings.
 - Add retry intervals of 1, 5, 30, 90 and 250 minutes, measured from each failure.
   Retry eligibility distinguishes transient errors from authentication, context
   limits and uncertain submissions. Uncertain research is not blindly resent.
@@ -108,16 +112,28 @@ The new features received UX and visual-design improvements:
   web research may continue after local monitoring stops.
 - Display context budgets, evidence checks, model execution details and partial
   search-index status. Provide English and Turkish interface text.
+- Show evidence-preparation status, planned part counts, additional account-call
+  costs and preserved checkpoint progress before continuing oversized synthesis.
 
 ## Validation and current boundaries
 
-The latest implementation validation passed 470 tests: 17 local-file tests,
+The earlier implementation validation passed 470 tests: 17 local-file tests,
 31 account-adapter tests, 157 research-service tests, 56 hybrid-search tests and
 209 frontend tests. TypeScript checks and the production build passed. These are
 recorded implementation results, not a claim that documentation publication reran
 the full suite. Live checks compared deployed code hashes, exercised the control
 dialogs without submitting research mutations, and verified preserved report
 hashes.
+
+The evidence-preparation update passed 202 research-service tests, two startup-copy
+tests and 34 focused
+frontend tests, TypeScript and the production Docker build. Seven targeted fault
+injections were detected by regression tests. Live read-only validation confirmed
+identical source/part identities for both synthesis peers and the responsive
+preparation panel. The full large research was not restarted. A small ChatGPT
+paired fixture preserved the checked facts; Claude refused the referenced fixture,
+leaving its paired quality comparison incomplete. These tests do not establish
+lossless LLM summarization.
 
 Initial content and vector indexing can remain incomplete after deployment;
 results expose partial coverage. OCR depends on image quality. Legacy binary
@@ -133,5 +149,6 @@ every task or recognize all future model families automatically.
 See the [module architecture](module-system.md),
 [module guide](../../modules/README.md),
 [stage-control contract](../../modules/multi-model-research/STAGE-CONTROLS.md),
+[evidence-preparation guide](../../modules/multi-model-research/EVIDENCE-PREPARATION.md),
 [account selection policy](../../modules/account-models/MODEL-SELECTION.md), and
 [local-file guide](../../modules/local-files/README.md) for operational details.

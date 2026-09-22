@@ -24,6 +24,8 @@ class StageControls:
                     await self.provider.cancel(stage)
                 task=self.tasks.get((run_id,stage_id))
                 if task:task.cancel();await asyncio.gather(task,return_exceptions=True)
+                from segmented_execution import confirm_cancel
+                await confirm_cancel(self,run,stage)
             except Exception as exc:
                 error=str(exc) if isinstance(exc,ServiceError) else 'Aşama işleminin durduğu doğrulanamadı.'
         async with self.lock:

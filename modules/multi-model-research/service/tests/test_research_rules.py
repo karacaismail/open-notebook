@@ -130,7 +130,7 @@ async def test_mismatched_peer_evidence_is_blocked_in_preview_and_submission(eng
     for s in r['stages'][:5]:await add(engine,r['id'],s['id'])
     await settle(engine)
     r=await engine.get(r['id'])
-    r['stages'][5].update(status='waiting_input',evidence_packet={'sha256':'different','bytes':1,'format':'markdown'})
+    r['stages'][5].update(status='waiting_input',attempts=1,evidence_packet={'sha256':'different','bytes':1,'format':'markdown'})
     r['auto_synthesize']=True
     await engine.store.save(r)
     preview=await engine.packet(r['id'],'synthesis_claude')
