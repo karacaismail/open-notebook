@@ -25,6 +25,9 @@ import { ResearchRetryPanel } from '@/modules/multi-model-research/components/Re
 import { attentionStates, roundKeys, ResearchStatus as Status } from '@/modules/multi-model-research/components/research-state'
 
 import { PreliminaryAccounts } from './components/PreliminaryAccounts'
+import { ResearchBriefInput } from './components/ResearchBriefInput'
+import { packBrief, validateBrief } from './brief-input'
+import { BriefDocument, composeBrief } from './brief-documents'
 import { ResearchStopFeedback, ResearchAttentionSummary } from './components/ResearchStopFeedback'
 
 const providerUrls:Record<string,string>={Gemini:'https://gemini.google.com/app',ChatGPT:'https://chatgpt.com/',Claude:'https://claude.ai/new'}
@@ -38,14 +41,20 @@ function NewResearch({onCreated}:{onCreated:(id:string)=>void}) {
   return <ResearchForm onCreated={onCreated} defaults={modules.data?.find(item=>item.id==='multi-model-research')?.settings}/>
 }
 
-function ResearchForm({onCreated,defaults}:{onCreated:(id:string)=>void;defaults?:Record<string,unknown>}) {
+export function ResearchForm({onCreated,defaults}:{onCreated:(id:string)=>void;defaults?:Record<string,unknown>}) {
   const {t}=useTranslation();const {create}=useResearchActions()
   const [preliminary,setPreliminary]=useState(defaults?.preliminary!==false)
   const [accountReview,setAccountReview]=useState(defaults?.account_review!==false)
+  const [readingBrief,setReadingBrief]=useState(false)
+  const [briefFiles,setBriefFiles]=useState<BriefDocument[]>([])
+  const [briefAccepted,setBriefAccepted]=useState(false)
+  const [briefBlocked,setBriefBlocked]=useState(false)
   const [question,setQuestion]=useState('');const [scope,setScope]=useState('');const [language,setLanguage]=useState(String(defaults?.language??'Türkçe'));const [auto,setAuto]=useState(defaults?.auto_synthesize!==false)
   const [asOf,setAsOf]=useState(()=>new Date().toLocaleDateString('sv-SE'));const [mode,setMode]=useState<ExecutionMode>(defaults?.execution_mode==='imports'?'imports':'browser')
   const request=useRef<{signature:string;key:string}|null>(null)
-  return <form className="space-y-5 rounded-xl border bg-card p-6" onSubmit={async event=>{event.preventDefault();try{const body={preliminary,account_review:accountReview,question,scope,language,as_of:asOf,auto_synthesize:auto,execution_mode:mode};const signature=JSON.stringify(body);if(request.current?.signature!==signature)request.current={signature,key:crypto.randomUUID()};const run=await create.mutateAsync({body,key:request.current.key});onCreated(run.id)}catch { /* Mutation errors are displayed by the hook. */ }}}>
+  const fullBrief=composeBrief(question,briefFiles.filter(file=>!file.error))
+  const cannotStart=readingBrief||create.isPending||briefBlocked||briefFiles.some(file=>!!file.error)||!!validateBrief(fullBrief,scope)||(briefFiles.some(file=>['pdf','docx'].includes(file.kind))&&!briefAccepted)
+  return <form className="space-y-5 rounded-xl border bg-card p-6" onSubmit={async event=>{event.preventDefault();if(cannotStart)return;try{const body={preliminary,account_review:accountReview,...packBrief(fullBrief,scope),language,as_of:asOf,auto_synthesize:auto,execution_mode:mode};const signature=JSON.stringify(body);if(request.current?.signature!==signature)request.current={signature,key:crypto.randomUUID()};const run=await create.mutateAsync({body,key:request.current.key});onCreated(run.id)}catch { /* Mutation errors are displayed by the hook. */ }}}>
     <label className="flex items-start gap-3 rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 text-sm"><input type="checkbox" checked={preliminary} onChange={e=>setPreliminary(e.target.checked)} className="mt-1 accent-blue-600"/><span><strong>{t('research.preliminary')}</strong><span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{t('research.preliminaryHelp')}</span></span></label>
     {preliminary&&<PreliminaryAccounts/>}
     <label className="flex items-start gap-3 rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm"><input type="checkbox" checked={accountReview} onChange={e=>setAccountReview(e.target.checked)} className="mt-1 accent-blue-600"/><span><strong>{t('research.accountReview')}</strong><span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{t('research.accountReviewHelp')}</span></span></label>
@@ -57,12 +66,11 @@ function ResearchForm({onCreated,defaults}:{onCreated:(id:string)=>void;defaults
           <span><span className="font-medium">{label}</span><span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{help}</span></span>
         </label>)}
     </fieldset>
-    <div className="space-y-2"><Label htmlFor="research-question">{t('research.question')}</Label><Textarea id="research-question" value={question} onChange={e=>setQuestion(e.target.value)} placeholder={t('research.questionPlaceholder')} required minLength={5} maxLength={12000} className="min-h-28 text-base"/></div>
-    <div className="space-y-2"><Label htmlFor="research-scope">{t('research.scope')}</Label><Textarea id="research-scope" value={scope} onChange={e=>setScope(e.target.value)} placeholder={t('research.scopePlaceholder')} maxLength={30000}/></div>
+    <ResearchBriefInput question={question} scope={scope} onQuestion={setQuestion} onScope={setScope} busy={readingBrief} onBusy={setReadingBrief} files={briefFiles} onFiles={setBriefFiles} accepted={briefAccepted} onAccepted={setBriefAccepted} onBlocked={setBriefBlocked}/>
     <div className="max-w-xs space-y-2"><Label htmlFor="research-language">{t('research.language')}</Label><Input id="research-language" value={language} onChange={e=>setLanguage(e.target.value)} required minLength={2} maxLength={60}/></div>
     <div className="max-w-xs space-y-2"><Label htmlFor="research-date">{t('research.asOf')}</Label><Input id="research-date" type="date" value={asOf} onChange={e=>setAsOf(e.target.value)} required/></div>
     <label className="flex items-start gap-3 text-sm"><input type="checkbox" checked={auto} onChange={e=>setAuto(e.target.checked)} className="mt-1 accent-blue-600"/>{t('research.auto')}</label>
-    <Button type="submit" disabled={create.isPending||question.trim().length<5}>{create.isPending?<Loader2 className="mr-2 size-4 animate-spin"/>:<Plus className="mr-2 size-4"/>}{t('research.start')}</Button>
+    <Button type="submit" disabled={cannotStart}>{create.isPending?<Loader2 className="mr-2 size-4 animate-spin"/>:<Plus className="mr-2 size-4"/>}{t('research.start')}</Button>
     {mode==='browser'&&<p className="text-xs leading-relaxed text-muted-foreground">{t('research.notGuaranteed')}</p>}
   </form>
 }
