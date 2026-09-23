@@ -94,10 +94,10 @@ function BrowserConnections() {
 
 function StageDetail({run,stage}:{run:ResearchRun;stage:ResearchStage}) {
   const {t}=useTranslation();const {upload,retry,error}=useResearchActions()
-  const packet=useResearchPacket(run.id,stage.id,stage.status!=='pending')
+  const packet=useResearchPacket(run.id,stage.id,!['pending','skipped'].includes(stage.status))
   const [text,setText]=useState('');const [file,setFile]=useState<File|null>(null);const [evidence,setEvidence]=useState<File[]>([]);const [url,setUrl]=useState('');const [manual,setManual]=useState(false)
   const [researchedAt,setResearchedAt]=useState('')
-  const unlocked=stage.status!=='pending';const canImport=!['stopping','stop_failed','cancelled'].includes(stage.control_state||'')&&unlocked&&!['running','completed'].includes(stage.status)
+  const unlocked=stage.status!=='pending';const canImport=!['stopping','stop_failed','cancelled'].includes(stage.control_state||'')&&unlocked&&!['running','completed','skipped'].includes(stage.status)
   async function submit(event:React.FormEvent) {
     event.preventDefault();if(!packet.data)return
     const data=new FormData();data.append('packet_sha',packet.data.sha256);data.append('origin_url',url);if(researchedAt)data.append('researched_at',researchedAt)
@@ -108,7 +108,7 @@ function StageDetail({run,stage}:{run:ResearchRun;stage:ResearchStage}) {
   return <section className="min-w-0 rounded-2xl border bg-card p-5 shadow-sm sm:p-6" aria-label={`${stage.provider} ${t(roundKeys[stage.round])}`}>
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">{t(roundKeys[stage.round])}</p><h2 className="text-xl font-semibold">{stage.provider}</h2></div><Status value={stage.control_state || stage.status}/></div>
     <ResearchStageControls run={run} stage={stage}/>
-    {!unlocked?<p className="py-8 text-muted-foreground">{t('research.blocked')}</p>:<>
+    {stage.status==='skipped'?<p role="status" className="rounded-xl border bg-muted/30 p-4 text-base leading-relaxed">{t('research.stageSkippedHelp')}</p>:!unlocked?<p className="py-8 text-muted-foreground">{t('research.blocked')}</p>:<>
       <ResearchStopFeedback stage={stage}/>
       <ResearchRetryPanel showAction={false} run={run} stage={stage} pending={retry.isPending} onRetry={expectedState=>retry.mutateAsync({id:run.id,stage:stage.id,expectedState})}/>
       {packet.data?.evidence_packet&&<SharedEvidencePacket packet={packet.data} onDownload={async()=>{try{const shared=packet.data!.evidence_packet!;downloadResearchFile(await researchApi.evidence(run.id,stage.id),'evidence-'+shared.sha256.slice(0,12)+(shared.format==='json'?'.json':'.md'))}catch(err){error(err)}}}/>}

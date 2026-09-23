@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Local OpenAI-compatible text adapter for the user's official, signed-in CLIs."""
 import concurrent.futures
+from datetime import datetime, timezone
 from functools import lru_cache
 import hashlib
 from collections import deque
@@ -15,7 +16,7 @@ import threading
 import time
 import uuid
 from cancellation import JOBS, RequestCancelled
-from model_policy import ModelPolicy, SelectionError
+from model_policy import ModelPolicy, SelectionError, quota_reset_at
 from preliminary import PROFILES, WEB_SYSTEM, command as preliminary_command, trace as preliminary_trace, capabilities as preliminary_capabilities
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -37,9 +38,32 @@ SYSTEM = (
 
 
 class BridgeError(Exception):
-    def __init__(self, message, status=400):
+    def __init__(self, message, status=400, retry_at=None):
         super().__init__(message)
         self.status = status
+        self.retry_at = retry_at
+
+    def payload(self):
+        error={'message':str(self),'type':'account_bridge_error','code':self.status}
+        if self.retry_at:error['retry_at']=datetime.fromtimestamp(self.retry_at,timezone.utc).isoformat()
+        return {'error':error}
+
+
+def gemini_error(result):
+    """Classify terminal CLI errors even when the process exits successfully."""
+    raw=result.get('error') or ''
+    message=raw if isinstance(raw,str) else str(raw.get('message','')) if isinstance(raw,dict) else ''
+    value=message.lower()
+    if any(word in value for word in ('resource_exhausted','quota','rate limit','usage limit','429')):
+        until=quota_reset_at(message)
+        MODEL_POLICY.limited('gemini',until)
+        reset=' Provider reset: '+datetime.fromtimestamp(until,timezone.utc).isoformat()+'.' if until else ''
+        raise BridgeError('Gemini account quota is exhausted.'+reset+' No partial report was accepted.',429,until)
+    if any(word in value for word in ('unauthenticated','not logged in','authentication','sign in','credentials')):
+        raise BridgeError('Gemini account sign-in is required. Run the matching Hesap-Giris command.',401)
+    if any(word in value for word in ('model_not_found','unknown model','model is not available','invalid model')):
+        raise BridgeError('The selected Gemini model is unavailable for this account.',404)
+    raise BridgeError('Gemini could not complete its response. No partial report was accepted.',502)
 
 
 class AccountQueue:
@@ -219,6 +243,8 @@ def prepare_prompt(body):
 def run_cli(model, prompt, profile='default', selection=None):
     provider = MODELS[model]['provider']
     if provider == 'gemini':
+        try:MODEL_POLICY.check_quota(provider)
+        except SelectionError as exc:raise BridgeError(str(exc),exc.status,exc.retry_at) from None
         agent_name = 'notebook-preliminary' if profile in ('preliminary_research','research_review') else 'notebook-text'
         # AGY silently falls back to its general-purpose agent when a persona is
         # missing. Refuse that fallback so notebook requests keep the text profile.
@@ -286,7 +312,7 @@ def run_cli(model, prompt, profile='default', selection=None):
                 if event.get('event') == 'result':
                     data = event.get('result', {})
                     if data.get('error') or data.get('status') not in (None, 'SUCCESS'):
-                        raise ValueError('CLI returned an error')
+                        gemini_error(data)
                     text = data.get('response', '')
                     raw = data.get('usage', {})
                     if raw:
@@ -370,14 +396,14 @@ def completion(body):
             excluded=[]
             for attempt in range(3):
                 try:selected=MODEL_POLICY.choose(MODELS[model],excluded)
-                except SelectionError as exc:raise BridgeError(str(exc),exc.status) from None
+                except SelectionError as exc:raise BridgeError(str(exc),exc.status,exc.retry_at) from None
                 selected['unavailable_models']=list(excluded)
                 JOBS.check()
                 try:
                     text,usage=run_cli(model,prompt,body['local_profile'],selected)
                     break
                 except BridgeError as exc:
-                    if exc.status==429:MODEL_POLICY.limited(MODELS[model]['provider'])
+                    if exc.status==429:MODEL_POLICY.limited(MODELS[model]['provider'],exc.retry_at)
                     if exc.status!=404 or attempt==2:raise
                     excluded.append(selected['model'])
         elif body.get('local_profile') == 'research_synthesis':
@@ -476,7 +502,7 @@ class Handler(BaseHTTPRequestHandler):
         except RequestCancelled as exc:
             self.send_json(409, {'error': {'message': str(exc), 'type': 'request_cancelled'}})
         except BridgeError as exc:
-            self.send_json(exc.status, {'error': {'message': str(exc), 'type': 'account_bridge_error'}})
+            self.send_json(exc.status, exc.payload())
         except (ValueError, TypeError, KeyError):
             self.send_json(400, {'error': {'message': 'Invalid request.', 'type': 'invalid_request_error'}})
         except (BrokenPipeError, ConnectionResetError):
@@ -505,7 +531,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 result = future.result()
             except BridgeError as exc:
-                self.sse({'error': {'message': str(exc), 'type': 'account_bridge_error', 'code': exc.status}})
+                self.sse(exc.payload())
                 self.wfile.write(b'data: [DONE]\n\n')
                 return
             except Exception:

@@ -13,7 +13,7 @@ RETRY_BACKOFF = (60, 300, 1800, 5400, 15000)
 # Only transient conditions retry themselves. A stall that needs a person (sign-in,
 # security verification), one that a repeat cannot fix (context limit, no research
 # mode), and above all an uncertain submission are never repeated automatically.
-AUTO_RETRY = ('failed', 'browser_unavailable', 'browser_changed', 'quota_wait')
+AUTO_RETRY = ('failed', 'browser_unavailable', 'browser_changed')
 
 # Every state a stage can be parked in that only a person can clear.
 ATTENTION = ('failed', 'interrupted', 'context_limit', 'login_required', 'verification_required',
@@ -76,8 +76,12 @@ def ancestors(run, stage):
     return [s for s in run['stages'] if s['round'] < stage['round']]
 
 
+def is_skipped(stage):
+    return stage['status']=='skipped' and stage.get('skip',{}).get('by')=='user'
+
+
 def ready(run, stage):
-    return all(s['status'] == 'completed' and not s.get('control_state') for s in ancestors(run,stage))
+    return all((s['status'] == 'completed' or is_skipped(s)) and not s.get('control_state') for s in ancestors(run,stage))
 
 
 def citations(text):
@@ -94,6 +98,7 @@ def report_packet(run, stage):
     # Complete text is included, never a silent summary or clipped excerpt.
     reports=[]
     for item in ancestors(run,stage):
+        if is_skipped(item):continue
         if item['status'] != 'completed':raise ValueError('Önceki aşamalar tamamlanmadı.')
         report=item['report']
         if run.get('prompt_version', 1) >= VERSION:
@@ -113,6 +118,8 @@ def report_packet(run, stage):
     packet = {'question':run['question'], 'scope':run['scope'], 'language':run['language'],
             'as_of':run.get('as_of') or run['created_at'][:10],
             'reports':reports}
+    skipped=[{'stage':s['id'],'provider':s['provider'],**s['skip']} for s in ancestors(run,stage) if is_skipped(s)]
+    if skipped:packet['skipped_stages']=skipped
     if run.get('prompt_version', 1) >= VERSION:
         packet['evidence_register'] = register(ancestors(run, stage))
     return packet
@@ -139,6 +146,12 @@ def prompt_for(run, stage, packet_format=None, packet=None, preamble=''):
     if phase == 1 and run.get('preliminary'):
         task += '\nÖn araştırmanın ortak taslağını başlangıç olarak kullan; taslağı doğrulanmış gerçek veya nihai karar sayma. Özgün soru, tüm ön raporlar ve kaynaklar aşağıda korunuyor. Bağımsız olarak yeniden doğrula.'
     packet=report_packet(run,stage) if packet is None else packet
+    if packet.get('skipped_stages'):
+        if stage['id']=='pre_brief_chatgpt':task=task.replace('Üç bağımsız ön araştırma raporunu','Mevcut bağımsız ön araştırma raporlarını')
+        if phase==4:task=task.replace('İki sentezi','Mevcut sentezleri')
+        task += ('\nKullanıcı bazı aşamaları açıkça atladı; skipped_stages alanında kayıtlıdır. '
+                 'Bu sağlayıcılardan rapor veya doğrulama alınmadı. Eksik katkıyı uydurma, '
+                 'tamamlanmış veya uzlaşmış sayma. Çıktının sınırlamalarında bu eksikliği belirt.')
     protocol = ('\n\n'+PROTOCOL.replace('CURRENT_STAGE',stage['id'])) if run.get('prompt_version',1)>=VERSION else ''
     selected_format = packet_format or stage.get('packet_format') or run.get('packet_format')
     if selected_format in ('markdown-v1', FORMAT):
@@ -158,7 +171,7 @@ def refresh_status(run):
             stage['status']='waiting_input' if stage['mode']=='import' else 'ready'
     states=[s['status'] for s in run['stages']]
     if run.get('control_state'):run['status']=run['control_state']
-    elif all(x=='completed' for x in states):run['status']='completed'
+    elif all(s['status']=='completed' or is_skipped(s) for s in run['stages']):run['status']='completed'
     elif run.get('paused'):run['status']='paused'
     elif 'running' in states:run['status']='running'
     elif any(x in ATTENTION for x in states) or any(s.get('control_state') for s in run['stages']):run['status']='needs_attention'

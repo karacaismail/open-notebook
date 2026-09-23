@@ -97,3 +97,56 @@ async def test_cancelled_stage_cannot_be_bypassed_by_import(engine):
     run=await create(engine);rid=run['id'];sid='research_chatgpt'
     await control(engine,run,sid,'cancel')
     with pytest.raises(ServiceError):await add(engine,rid,sid)
+
+@pytest.mark.asyncio
+async def test_explicit_skip_preserves_reports_and_unblocks_preliminary_merge(engine):
+    import copy
+    from workflow import report_packet
+    engine.provider.fail.add('pre_research_gemini')
+    run=await engine.create({'question':'Research this subject','scope':'','language':'English',
+        'preliminary':True,'auto_synthesize':False,'execution_mode':'imports'},'skip-preliminary')
+    await settle(engine);run=await engine.get(run['id'])
+    saved=copy.deepcopy([s['report'] for s in run['stages'][1:3]])
+    run=await control(engine,run,'pre_research_gemini','skip');await settle(engine)
+    run=await engine.get(run['id']);skipped=engine.stage(run,'pre_research_gemini')
+    assert skipped['status']=='skipped' and skipped['report'] is None
+    assert skipped['skip']['previous_status']=='failed'
+    assert skipped['next_retry_at'] is None and skipped['control_state'] is None
+    assert [s['report'] for s in run['stages'][1:3]]==saved
+    assert engine.stage(run,'pre_brief_chatgpt')['status']=='completed'
+    prompt=next(p for sid,p in engine.provider.calls if sid=='pre_brief_chatgpt')
+    packet=report_packet(run,engine.stage(run,'pre_brief_chatgpt'))
+    assert len(packet['reports'])==2
+    assert (await engine.packet(run['id'],'pre_brief_chatgpt'))['report_count']==2
+    assert packet['skipped_stages'][0]['stage']=='pre_research_gemini'
+    from token_budget import TokenBudget
+    engine.budget=TokenBudget(len)
+    plan=await engine.context_plan(run['id'])
+    assert 'pre_research_gemini' not in [row['stage_id'] for row in plan['stages']]
+    assert 'skipped_stages' in prompt and 'Gemini' in prompt
+    assert 'Üç bağımsız ön araştırma' not in prompt
+    assert not await engine.sweep_retries()
+    await engine.recover()
+    for action in ('retry','resume','restore','skip'):
+        with pytest.raises(ServiceError):await control(engine,await engine.get(run['id']),'pre_research_gemini',action)
+    with pytest.raises(ServiceError):await add(engine,run['id'],'pre_research_gemini')
+
+@pytest.mark.asyncio
+async def test_skip_requires_completed_peer_and_never_changes_frozen_downstream_input(engine):
+    run=await create(engine)
+    with pytest.raises(ServiceError):await control(engine,run,'research_gemini','skip')
+    await add(engine,run['id'],'research_chatgpt')
+    await settle(engine)
+    run=await engine.get(run['id'])
+    engine.stage(run,'review_chatgpt')['attempts']=1
+    await engine.store.save(run)
+    with pytest.raises(ServiceError):await control(engine,run,'research_gemini','skip')
+    engine.stage(run,'review_chatgpt')['attempts']=0
+    await engine.store.save(run)
+    run=await control(engine,run,'research_gemini','skip')
+    with pytest.raises(ServiceError):await control(engine,run,'final_chatgpt','skip')
+
+@pytest.mark.asyncio
+async def test_running_stage_must_be_stopped_before_skip(engine):
+    run=await parallel(engine)
+    with pytest.raises(ServiceError):await control(engine,run,'synthesis_chatgpt','skip')

@@ -1,8 +1,32 @@
 """One-stage controls. Never change a sibling or the run's pause policy."""
 import asyncio
-from workflow import ATTENTION, ready, refresh_status
+from workflow import ATTENTION, ancestors, now, ready, refresh_status
 
 class StageControls:
+    async def skip_stage(self,run_id,stage_id,expected_state):
+        """Explicitly omit one settled parallel contribution, never invent a report."""
+        from engine import ServiceError
+        async with self.lock:
+            run=await self.get(run_id);stage=self.stage(run,stage_id)
+            self.check_control_snapshot(run,expected_state,stage_id)
+            if run['paused'] or run.get('control_state'):
+                raise ServiceError('Önce tüm araştırmayı devam ettirin.',409)
+            if stage['status'] in ('running','completed','skipped') or stage.get('report') or (run_id,stage_id) in self.tasks:
+                raise ServiceError('Yalnız durduğu doğrulanan, raporu olmayan aşama atlanabilir.',409)
+            if stage.get('control_state') in ('stopping','stop_failed','cancelled'):
+                raise ServiceError('Önce bu aşamanın durdurma durumunu çözün.',409)
+            peers=[s for s in run['stages'] if s['round']==stage['round'] and s['id']!='pre_brief_chatgpt']
+            if stage['id']=='pre_brief_chatgpt' or len(peers)<2 or not any(s['id']!=stage_id and s['status']=='completed' and s.get('report') for s in peers):
+                raise ServiceError('En az bir tamamlanmış paralel rapor gerekli; birleştirme ve son karar atlanamaz.',409)
+            if any((s['attempts'] or s.get('report') or s.get('evidence_packet')) and any(p['id']==stage_id for p in ancestors(run,s)) for s in run['stages']):
+                raise ServiceError('Sonraki aşamanın girdisi zaten dondurulmuş; araştırma geçmişi değiştirilemez.',409)
+            stage['skip']={'by':'user','at':now(),'previous_status':stage['status'],
+                'reason':stage.get('error') or 'User chose to continue without this contribution.'}
+            stage.update(status='skipped',control_state=None,control_error=None,next_retry_at=None,error=None,finished_at=now())
+            refresh_status(run);await self.store.save(run)
+        await self.kick(run_id);self.schedule_sync(run_id)
+        return await self.get(run_id)
+
     @staticmethod
     def stage_snapshot(run,stage):
         return {'scope':'stage','run_paused':run['paused'],'run_control_state':run.get('control_state'),
@@ -38,12 +62,13 @@ class StageControls:
 
     async def stage_action(self,run_id,stage_id,action,expected_state=None):
         from engine import ServiceError
+        if action=='skip':return await self.skip_stage(run_id,stage_id,expected_state)
         if action not in ('pause','stop','cancel','resume','restore','retry'):raise ServiceError('Bilinmeyen aşama işlemi.')
         async with self.lock:
             run=await self.get(run_id);stage=self.stage(run,stage_id)
             self.check_control_snapshot(run,expected_state,stage_id)
             if run.get('control_state'):raise ServiceError('Önce tüm araştırmanın durdurma durumunu çözün.',409)
-            if stage['status']=='completed':raise ServiceError('Tamamlanan aşama ve raporu değiştirilmez.',409)
+            if stage['status'] in ('completed','skipped'):raise ServiceError('Tamamlanan veya atlanan aşama değiştirilmez.',409)
             held=stage.get('control_state')
             if action in ('pause','stop','cancel'):
                 if held=='stopping':return run

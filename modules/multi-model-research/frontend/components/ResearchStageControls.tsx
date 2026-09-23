@@ -1,20 +1,20 @@
 'use client'
 
 import { useState } from 'react'
-import { Loader2, Pause, Play, RotateCcw, RotateCw, Square, XCircle, SlidersHorizontal } from 'lucide-react'
+import { Loader2, Pause, Play, RotateCcw, RotateCw, Square, XCircle, SlidersHorizontal, SkipForward } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/lib/hooks/use-translation'
 import { useResearchActions } from '../hooks'
 import { type ResearchRun, type ResearchStage } from '../api'
 import { ResearchActionDialog, type ControlAction } from './ResearchActionDialog'
-import { canRetryStage } from './research-state'
+import { canRetryStage, canSkipStage } from './research-state'
 
 type StageAction = Exclude<ControlAction, 'automate'>
 export function ResearchStageControls({ run, stage }: { run: ResearchRun; stage: ResearchStage }) {
   const { t } = useTranslation()
   const { stageAction } = useResearchActions()
   const [intent, setIntent] = useState<StageAction | null>(null)
-  if (stage.status === 'completed') return null
+  if (['completed', 'skipped'].includes(stage.status)) return null
   const held = stage.control_state
   const stopping = held === 'stopping'
   const globalHold = run.paused || !!run.control_state
@@ -28,6 +28,7 @@ export function ResearchStageControls({ run, stage }: { run: ResearchRun; stage:
   } else if (held === 'stop_failed') choices.push({ action: 'stop', icon: Square, caution: true })
   else if (held === 'paused' || held === 'stopped') choices.push({ action: 'resume', icon: Play }, { action: 'cancel', icon: XCircle, caution: true })
   else if (held === 'cancelled') choices.push({ action: 'restore', icon: RotateCcw })
+  if (canSkipStage(run, stage)) choices.push({ action: 'skip', icon: SkipForward, caution: true })
   return <section aria-label={t('research.stageControls')} className="mb-5 space-y-3 rounded-xl border border-primary/25 bg-primary/[0.03] p-4">
     <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="flex items-center gap-2 text-sm font-semibold"><SlidersHorizontal aria-hidden className="size-4 text-primary" />{t('research.stageControls')}</h3><span className="text-xs font-medium text-muted-foreground">{stage.provider}</span></div>
     <p className="text-xs leading-relaxed text-muted-foreground">{t('research.stageControlsHelp')}</p>

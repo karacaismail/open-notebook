@@ -56,7 +56,7 @@ def test_each_failure_arms_the_next_interval_then_stops():
 
 
 @pytest.mark.parametrize('status', ['submission_uncertain', 'login_required', 'verification_required',
-                                    'context_limit', 'research_unavailable', 'interrupted'])
+                                    'context_limit', 'research_unavailable', 'interrupted', 'quota_wait'])
 def test_states_that_need_a_person_are_never_rearmed(status):
     assert status not in AUTO_RETRY
     stage = {'status': status, 'retry_index': 0, 'next_retry_at': 'x'}
@@ -155,3 +155,31 @@ async def test_manual_retry_does_not_resume_the_whole_run(engine):
     with pytest.raises(ServiceError):await engine.retry_stage(run['id'], 'synthesis_chatgpt')
     assert (await engine.get(run['id']))['paused']
     assert not engine.provider.calls
+
+@pytest.mark.asyncio
+async def test_quota_wait_drops_legacy_timer_on_restart_and_never_retries(engine):
+    run=await failing_run(engine)
+    async with engine.lock:
+        run=await engine.get(run['id'])
+        stage_of(run,'synthesis_chatgpt').update(status='quota_wait',next_retry_at=(datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat())
+        await engine.store.save(run)
+    engine.provider.calls.clear()
+    await engine.recover()
+    assert stage_of(await engine.get(run['id']),'synthesis_chatgpt')['next_retry_at'] is None
+    assert not await engine.sweep_retries()
+    assert not engine.provider.calls
+
+@pytest.mark.asyncio
+async def test_account_quota_displays_reported_reset_without_echoing_raw_error(tmp_path,monkeypatch):
+    import httpx
+    from engine import AccountProvider
+    reset=(datetime.now(timezone.utc)+timedelta(days=4)).replace(second=0,microsecond=0)
+    client=httpx.AsyncClient(transport=httpx.MockTransport(lambda request:httpx.Response(429,json={
+        'error':{'message':'private provider diagnostic','retry_at':reset.isoformat()}})))
+    monkeypatch.setattr('engine.httpx.AsyncClient',lambda **kwargs:client)
+    key=tmp_path/'key';key.write_text('isolated-test-key')
+    with pytest.raises(ServiceError) as error:
+        await AccountProvider(key).synthesize({'provider':'Gemini'},'test brief')
+    assert error.value.kind=='quota_wait'
+    assert reset.strftime('%Y-%m-%d %H:%M UTC') in str(error.value)
+    assert 'private provider diagnostic' not in str(error.value)

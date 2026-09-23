@@ -5,6 +5,7 @@ import { researchEn } from '../locales'
 import { ResearchStageControls } from './ResearchStageControls'
 import { ResearchControls } from './ResearchControls'
 import { ResearchActionDialog } from './ResearchActionDialog'
+import { ResearchWorkflow } from './ResearchWorkflow'
 
 const mutation = vi.hoisted(() => ({ mutate: vi.fn(), mutateAsync: vi.fn().mockResolvedValue({}), isPending: false }))
 vi.mock('../hooks', () => ({ useResearchActions: () => ({ action: mutation, stageAction: mutation, error: vi.fn() }) }))
@@ -85,4 +86,40 @@ it('keeps resume disabled during a whole-run pause', () => {
   const stage={...run.stages[0],status:'stopped',control_state:'stopped' as const}
   render(<ResearchStageControls run={{...run,paused:true,stages:[stage]}} stage={stage} />)
   expect(screen.getByRole('button',{name:'Resume stage'})).toBeDisabled()
+})
+
+const savedReport = { content: 'Original research', researched_at: null, sha256: 'report-hash', citations: ['https://example.org'], provenance: 'account_preliminary_research', origin_url: '', evidence: [], original_files: [] }
+it('requires two confirmations before skipping a quota-blocked contribution', async () => {
+  const stage = { ...run.stages[0], id: 'pre_research_gemini', provider: 'Gemini', status: 'quota_wait' }
+  const data = { ...run, stages: [stage, { ...run.stages[0], status: 'completed', report: savedReport }] }
+  render(<ResearchStageControls run={data} stage={stage} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Skip this stage' }))
+  expect(screen.getByText(/This provider contributes no report or verification/)).toBeVisible()
+  expect(mutation.mutateAsync).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'I understand, continue' }))
+  expect(screen.getByRole('button', { name: 'Yes, Skip this stage' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('checkbox'))
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Yes, Skip this stage' })) })
+  expect(mutation.mutateAsync).toHaveBeenCalledExactlyOnceWith({ id: 'test', stage: stage.id, action: 'skip', expectedState: { scope: 'stage', run_paused: false, run_control_state: null, stage: [stage.id, 'quota_wait', 1, null] } })
+})
+
+it('does not offer skip for running, already skipped or sole contributions', () => {
+  const view = render(<ResearchStageControls run={run} stage={run.stages[0]} />)
+  expect(screen.queryByRole('button', { name: 'Skip this stage' })).not.toBeInTheDocument()
+  const stage = { ...run.stages[0], status: 'skipped' }
+  view.rerender(<ResearchStageControls run={{ ...run, stages: [stage] }} stage={stage} />)
+  expect(screen.queryByRole('button')).not.toBeInTheDocument()
+})
+
+it('shows skipped work separately from saved reports and selects the next phase', () => {
+  const data = { ...run, stages: [
+    { ...run.stages[0], id: 'pre_research_gemini', provider: 'Gemini', status: 'skipped' },
+    { ...run.stages[0], status: 'completed', report: savedReport },
+    { ...run.stages[0], id: 'research_claude', round: 1, status: 'waiting_input' },
+  ] }
+  render(<ResearchWorkflow run={data} selected="research_claude" onSelect={vi.fn()} />)
+  expect(screen.getByText('1 skipped · no report counted')).toBeVisible()
+  expect(screen.getByText(/1 reports saved/)).toBeVisible()
+  expect(screen.getByRole('button', { name: /Gemini.*Skipped/ })).toBeVisible()
+  expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '2')
 })

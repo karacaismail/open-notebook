@@ -1,4 +1,10 @@
 export const researchEn = {
+  skipped: 'Skipped',
+  skippedCount: '{{count}} skipped · no report counted',
+  stageAction_skip: 'Skip this stage',
+  stageEffect_skip: 'Continue with the available parallel reports. This provider contributes no report or verification; later outputs must disclose the missing contribution. Existing reports remain unchanged. This stage cannot be restored in this run once skipped.',
+  stageSkippedHelp: 'You skipped this contribution. No report or verification is attributed to this provider. Research continues with the available reports; their contents are unchanged.',
+
   briefInputTitle: "Start with text or documents",
   briefInputHelp: "Write a brief, select files, or combine both. Up to {{limit}} characters including file labels and criteria. Text is never silently shortened.",
   briefQuestionLabel: "Research instructions (optional with files)",
@@ -217,6 +223,11 @@ export const researchEn = {
   autoRetrySchedule: 'A stalled stage retries itself after 1, 5, 30, 90 and 250 minutes.',
 }
 export const researchTr: typeof researchEn = {
+  skipped: 'Atlandı',
+  skippedCount: '{{count}} aşama atlandı · rapor sayılmadı',
+  stageAction_skip: 'Bu aşamayı atla',
+  stageEffect_skip: 'Mevcut paralel raporlarla devam eder. Bu sağlayıcıdan rapor veya doğrulama alınmaz; sonraki çıktılar eksik katkıyı açıkça belirtir. Mevcut raporlar korunur. Atlandıktan sonra bu aşama aynı araştırmada geri yüklenemez.',
+  stageSkippedHelp: 'Bu katkıyı atladınız. Sağlayıcıya rapor veya doğrulama atfedilmez. Araştırma mevcut raporlarla devam eder; içerikleri değişmez.',
   briefInputTitle: "Metin veya belgelerle başla",
   briefInputHelp: "Metin yaz, dosya seç veya ikisini birlikte kullan. Dosya başlıkları ve ölçütler dahil en fazla {{limit}} karakter. Metin sessizce kısaltılmaz.",
   briefQuestionLabel: "Araştırma talimatı (dosya eklediğinde isteğe bağlı)",

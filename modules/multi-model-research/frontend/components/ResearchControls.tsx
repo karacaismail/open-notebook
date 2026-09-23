@@ -14,7 +14,7 @@ export function ResearchControls({ run }: { run: ResearchRun }) {
   const { t } = useTranslation()
   const { action, error } = useResearchActions()
   const [exporting, setExporting] = useState(false)
-  const [intent, setIntent] = useState<Exclude<ControlAction, 'retry'> | null>(null)
+  const [intent, setIntent] = useState<Exclude<ControlAction, 'retry' | 'skip'> | null>(null)
   const stopping = run.control_state === 'stopping'
   const cancelled = run.control_state === 'cancelled'
   const blocked = stopping || run.control_state === 'stop_failed'

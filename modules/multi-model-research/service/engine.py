@@ -7,7 +7,7 @@ import uuid
 import httpx
 from browser_runtime import BrowserAttention
 from datetime import datetime, timedelta, timezone
-from workflow import ATTENTION, AUTO_RETRY, RETRY_BACKOFF, SYSTEM, ancestors, citations, digest, initial_stages, now, prompt_for, ready, refresh_status, report_packet
+from workflow import ATTENTION, AUTO_RETRY, RETRY_BACKOFF, SYSTEM, ancestors, citations, digest, initial_stages, is_skipped, now, prompt_for, ready, refresh_status, report_packet
 import math
 from evidence_protocol import VERSION, audit_report, audit_appendix
 from packet_markdown import FORMAT, evidence_identity, evidence_body, markdown_packet
@@ -61,6 +61,13 @@ class AccountProvider:
                       429:'Hesap kotası doldu. Kota yenilendikten sonra devam edebilirsiniz.',
                       504:'Hesap isteği zaman aşımına uğradı.'}
             detail=response.json().get('error',{}).get('message','') if response.headers.get('content-type','').startswith('application/json') else ''
+            if response.status_code==429 and response.headers.get('content-type','').startswith('application/json'):
+                reset=response.json().get('error',{}).get('retry_at')
+                try:
+                    stamp=datetime.fromisoformat(reset)
+                    if stamp.tzinfo and stamp>datetime.now(timezone.utc):
+                        messages[429]+=' Sağlayıcının bildirdiği yenilenme: '+stamp.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')+'. Otomatik tekrar yapılmayacak.'
+                except (TypeError,ValueError):pass
             kind={401:'login_required',403:'research_unavailable',422:'research_unavailable',429:'quota_wait'}.get(response.status_code)
             raise ServiceError(messages.get(response.status_code,detail or 'Hesap bağlantısı hata verdi ('+str(response.status_code)+').'),502,kind=kind)
         data=response.json();choice=data['choices'][0];text=choice['message'].get('content','')
@@ -141,6 +148,7 @@ class Engine(StageControls):
         async with self.lock:
             for run in await self.store.all():
                 for s in run['stages']:
+                    if s['status']=='quota_wait':s['next_retry_at']=None
                     if s.get('control_state'):
                         if s['control_state']=='stopping':stage_stops.append((run['id'],s['id'],s.get('control_target','stopped')))
                         continue
@@ -206,7 +214,7 @@ class Engine(StageControls):
             preparation=await asyncio.to_thread(self.preparation_plan,run,stage,prompt,policy['policy'])
         else:preparation=stage.get('preparation')
         return {'prompt':prompt,'sha256':digest(prompt),'evidence_packet':identity,**budget,**policy,
-                'compaction':compaction,'preparation':preparation,'report_count':len(ancestors(run,stage))}
+                'compaction':compaction,'preparation':preparation,'report_count':sum(s['status']=='completed' for s in ancestors(run,stage))}
 
     @staticmethod
     def evidence_id(prompt):
@@ -278,8 +286,8 @@ class Engine(StageControls):
     def _context_plan(self,run):
         rows=[]
         for stage in run['stages']:
-            if stage['mode']!='account' or stage['status']=='completed':continue
-            missing=[s for s in ancestors(run,stage) if s['status']!='completed']
+            if stage['mode']!='account' or stage['status']=='completed' or is_skipped(stage):continue
+            missing=[s for s in ancestors(run,stage) if s['status']!='completed' and not is_skipped(s)]
             try:
                 if not missing:
                     prompt=self.input_prompt(run,stage)
@@ -288,7 +296,7 @@ class Engine(StageControls):
                     # It still goes through the gate, or the warning would describe a packet
                     # the service would never send.
                     projected=copy.deepcopy(run)
-                    projected['stages']=[s for s in projected['stages'] if s['status']=='completed' or s['id']==stage['id']]
+                    projected['stages']=[s for s in projected['stages'] if s['status']=='completed' or is_skipped(s) or s['id']==stage['id']]
                     prompt=self.prepared(projected,stage,peers=run)[0]
                 measured=self.measure_input(prompt,stage)
                 reserve=sum(self.budget.output_tokens_by_round.get(s['round'],32000) for s in missing)
@@ -418,6 +426,7 @@ class Engine(StageControls):
             if stage['status']=='completed':
                 if stage['report']['sha256']==report_hash:return run
                 raise ServiceError('Bu aşamada zaten bir rapor var. Tamamlanmış raporlar değiştirilmez; yeni bir araştırma oluşturun.',409)
+            if stage['status']=='skipped':raise ServiceError('Atlanan aşama sonradan raporla değiştirilemez; yeni araştırma oluşturun.',409)
             if stage['status']=='running' or stage.get('control_state') in ('stopping','stop_failed','cancelled'):raise ServiceError('Önce bu aşamanın durdurma durumunu çözün veya aşamayı geri yükleyin.',409)
             if not ready(run,stage):raise ServiceError('Önceki turdaki bütün raporlar gerekli.',409)
             expected=digest(self.input_prompt(run,stage))

@@ -61,3 +61,5 @@ What this makes easier, what it makes harder, what to watch. (bullets)
 - [ADR-013: Verified evidence preparation](ADR-013-evidence-preparation.md) — reversible references, exhaustive input partitions and durable account synthesis.
 
 - [ADR-014: Account-based re-research](ADR-014-account-research-again.md) — shared evidence parts, fresh source checks and durable reconciliation.
+- [ADR-015: Research brief files](ADR-015-research-brief-files.md) — complete text and validated multiple-document input.
+- [ADR-016: Explicit research skip](ADR-016-explicit-research-skip.md) — optional contributions, preserved evidence and quota-aware continuation.

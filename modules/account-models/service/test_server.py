@@ -148,6 +148,33 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(error.exception.status, 503)
         self.assertEqual(spawn.call_count, 1)  # profile inspection only, no research
 
+    def test_gemini_terminal_quota_with_exit_zero_blocks_future_calls(self):
+        from unittest.mock import Mock
+        policy=server.ModelPolicy({'gemini':'test'})
+        probe=Mock(returncode=0,args=['test','agents']);probe.communicate.return_value=('notebook-preliminary\n','')
+        result={'event':'result','result':{'status':'ERROR','response':'','error':
+            'API error (attempt 3): RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 95h0m0s.'}}
+        proc=Mock(returncode=0);proc.communicate.return_value=(json.dumps(result),'')
+        with patch.object(server,'MODEL_POLICY',policy),patch.object(server.JOBS,'spawn',side_effect=[probe,proc]) as spawn:
+            with self.assertRaises(server.BridgeError) as error:server.run_cli('gemini-account','input','preliminary_research')
+            self.assertEqual(error.exception.status,429)
+            self.assertGreater(error.exception.retry_at,time.time()+94*3600)
+            self.assertIn('retry_at',error.exception.payload()['error'])
+            with self.assertRaises(server.BridgeError):server.run_cli('gemini-account','input','preliminary_research')
+            self.assertEqual(spawn.call_count,2)
+
+    def test_gemini_report_keywords_do_not_mask_actual_terminal_failure(self):
+        from unittest.mock import Mock
+        probe=Mock(returncode=0,args=['test','agents']);probe.communicate.return_value=('notebook-preliminary\n','')
+        events=[{'event':'assistant','message':'Research topics: quota, login, credentials, 429'},
+                {'event':'result','result':{'status':'ERROR','response':'Partial report',
+                                           'error':'Connection reset by peer'}}]
+        proc=Mock(returncode=0);proc.communicate.return_value=('\n'.join(map(json.dumps,events)),'')
+        with patch.object(server,'MODEL_POLICY',server.ModelPolicy({'gemini':'test'})),patch.object(server.JOBS,'spawn',side_effect=[probe,proc]):
+            with self.assertRaises(server.BridgeError) as error:server.run_cli('gemini-account','input','preliminary_research')
+        self.assertEqual(error.exception.status,502)
+        self.assertNotIn('Partial report',str(error.exception))
+
     def test_research_profile_raises_effort_without_enabling_tools(self):
         normal = server.command_for('chatgpt-account')
         research = server.command_for('chatgpt-account', 'research_synthesis')

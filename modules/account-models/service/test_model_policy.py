@@ -46,3 +46,20 @@ def test_completion_does_not_retry_partial_output_or_quota(monkeypatch):
     monkeypatch.setattr(server,'run_cli',fail)
     with pytest.raises(server.BridgeError):server.completion({'model':'claude-account','local_profile':'preliminary_research','messages':[{'role':'user','content':'full packet'}]})
     assert len(calls)==1
+
+def test_provider_reset_survives_restart_and_shorter_cooldowns(tmp_path,monkeypatch):
+    monkeypatch.setattr(m.time,'time',lambda:1000)
+    until=m.quota_reset_at('RESOURCE_EXHAUSTED: Individual quota reached. Resets in 95h3m33s.')
+    assert until==1000+95*3600+3*60+33
+    p=m.ModelPolicy({'gemini':'test'},tmp_path/'quota.json')
+    p.limited('gemini',until);p.limited('gemini')
+    p=m.ModelPolicy({'gemini':'test'},tmp_path/'quota.json')
+    monkeypatch.setattr(m,'discover',lambda *a:pytest.fail('No discovery or new request before reset'))
+    with pytest.raises(m.SelectionError) as error:p.choose({'provider':'gemini'})
+    assert error.value.retry_at==until and error.value.status==429
+    monkeypatch.setattr(m.time,'time',lambda:until+1)
+    p.check_quota('gemini')
+
+@pytest.mark.parametrize('text',['no reset given','Resets in 999999999999999999h','Resets in -2h','Resets in 0s'])
+def test_invalid_quota_reset_does_not_create_a_fictitious_timestamp(text):
+    assert m.quota_reset_at(text) is None

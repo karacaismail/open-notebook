@@ -1,11 +1,19 @@
 """Read-only account discovery; ranked, maximum-effort preliminary research.
 Calibrated synthesis remains pinned to its measured model/runtime. No API keys.
 """
-import json,os,re,selectors,signal,subprocess,threading,time
+import json,math,os,re,selectors,signal,subprocess,threading,time
+from datetime import datetime, timezone
 from pathlib import Path
 EFFORTS=['none','minimal','low','medium','high','xhigh','max','ultra']
 class SelectionError(Exception):
-    def __init__(self,message,status=503):super().__init__(message);self.status=status
+    def __init__(self,message,status=503,retry_at=None):super().__init__(message);self.status=status;self.retry_at=retry_at
+
+def quota_reset_at(message):
+    """Parse only a terminal provider error, never echoed user/report content."""
+    match=re.search(r'Resets in\s+((?:\d+(?:\.\d+)?[hms])+)',message,re.I)
+    if not match:return None
+    seconds=sum(float(n)*{'h':3600,'m':60,'s':1}[unit.lower()] for n,unit in re.findall(r'(\d+(?:\.\d+)?)([hms])',match[1],re.I))
+    return time.time()+seconds if 0<seconds<=366*86400 else None
 
 def rpc(executable,args,first,after=None,timeout=15):
     p=subprocess.Popen([executable,*args],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
@@ -65,15 +73,22 @@ class ModelPolicy:
         if self.state and self.state.exists():
             try:self.cooldowns=json.loads(self.state.read_text())
             except (ValueError,OSError):pass
-    def limited(self,provider):
+    def limited(self,provider,retry_at=None):
         with self.lock:
-            self.cooldowns[provider]=time.time()+60
+            until=retry_at if isinstance(retry_at,(int,float)) and math.isfinite(retry_at) and time.time()<retry_at<=time.time()+366*86400 else 0
+            self.cooldowns[provider]=max(self.cooldowns.get(provider,0),time.time()+60,until)
             if self.state:
                 self.state.parent.mkdir(exist_ok=True);temp=self.state.with_suffix('.tmp');temp.write_text(json.dumps(self.cooldowns));os.chmod(temp,0o600);temp.replace(self.state)
+    def check_quota(self,provider):
+        with self.lock:
+            until=self.cooldowns.get(provider,0)
+            if until>time.time():
+                stamp=datetime.fromtimestamp(until,timezone.utc).isoformat()
+                raise SelectionError('Account quota is exhausted. Retry after '+stamp+'; no replacement request was sent.',429,until)
     def choose(self,spec,excluded=()):
         provider=spec['provider']
         with self.discovery_locks[provider]:
-            if self.cooldowns.get(provider,0)>time.time():raise SelectionError('Account quota was exhausted. Wait before retrying; no replacement request was sent.',429)
+            self.check_quota(provider)
             stamp,data=self.cache.get(provider,(0,None))
             if time.time()-stamp>60 or data is None:
                 try:data=discover(provider,self.executables[provider])
