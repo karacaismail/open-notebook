@@ -14,6 +14,14 @@ Updated: 2026-09-24. Scope: continuing research safely when one parallel provide
 - Quota errors no longer trigger the 1/5/30/90/250-minute retry sequence.
 - Terminal Gemini errors are parsed separately from report content; known reset times persist in the account bridge and prevent premature requests.
 
+## Browser recovery hardening (2026-09-24)
+
+- The task composer recognizes an uploaded packet by its exact card title or accessible name, including wrapped filenames. Sidebar and previous-message attachments cannot satisfy readiness.
+- Short, finite entrance animations in the composer and Gemini research panel can settle while their task window is covered. Static hidden elements and indefinite activity animations remain unchanged.
+- A completed or running research task cannot trigger an old plan's Start button.
+- A confirmed conversation renews its two-hour observation window up to a 24-hour cap per monitoring session. Renewal only observes the existing conversation; it never uploads or submits the question again. Unconfirmed conversations still stop for review, and user stop/pause controls remain effective.
+- Browser tests cover hidden and wrapped attachments, unrelated sidebar cards, completion beside an old plan, report recovery, a bounded monitor and the absence of any second submission.
+
 ## Planned next increments — not implemented
 
 | Priority | Capability | Acceptance criteria |

@@ -119,8 +119,9 @@ class ExtensionRuntime:
 
 
 class ExtensionResearch(BrowserResearch):
-    def __init__(self, runtime, root, timeout=7200, poll_seconds=8):
+    def __init__(self, runtime, root, timeout=7200, poll_seconds=8, max_watch_seconds=86400):
         super().__init__(runtime, root, timeout=timeout, poll_seconds=poll_seconds)
+        self.max_watch_seconds = max(timeout, max_watch_seconds)
 
     async def research(self, run_id, stage, prompt, progress):
         sid, provider = stage['id'], stage['provider']
@@ -189,9 +190,19 @@ class ExtensionResearch(BrowserResearch):
             if job['phase'] != 'submitted':
                 raise BrowserAttention('Gönderim sağlayıcıda doğrulanamadı; otomatik tekrar yapılmadı.', 'submission_uncertain')
         await progress({'phase': job['phase'], 'url': job.get('url'), 'message': provider+' kaynakları araştırıyor.'})
-        deadline = time.monotonic() + self.timeout
+        started = time.monotonic()
+        deadline = started + self.timeout
+        hard_deadline = started + self.max_watch_seconds
         previous = None; stable = 0
-        while time.monotonic() < deadline:
+        while time.monotonic() < hard_deadline:
+            if time.monotonic() >= deadline:
+                # Renew observation only. Never refill, resend or restart a plan.
+                # Unknown / unconfirmed conversations still require human review.
+                if not self.conversation_url(provider, job.get('url') or ''):
+                    break
+                deadline = min(time.monotonic() + self.timeout, hard_deadline)
+                await progress({'phase': 'monitoring', 'url': job['url'],
+                                'message': provider+' araştırmasının mevcut konuşması izleniyor; yeni istek gönderilmedi.'})
             state = await bridge.request('inspect', provider, key)
             check_state(state)
             if state.get('sign_in_visible'):
@@ -199,7 +210,7 @@ class ExtensionResearch(BrowserResearch):
             if state.get('marker_present') and self.conversation_url(provider, state['url']):
                 if job.get('url') != state['url']:
                     job['url'] = state['url']; self.save(run_id, sid, job)
-            if state.get('plan_visible') and not job.get('plan_attempted'):
+            if state.get('plan_visible') and not (job.get('plan_attempted') or job.get('research_started') or state.get('research_complete') or state.get('busy')):
                 job.update(phase='plan_confirming', plan_attempted=True); self.save(run_id, sid, job)
                 await bridge.request('start_plan', provider, key)
                 await asyncio.sleep(2)

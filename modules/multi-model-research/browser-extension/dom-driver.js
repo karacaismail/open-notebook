@@ -34,19 +34,36 @@ globalThis.__openNotebookResearchDriver = async function(command) {
     }
     el.click();
   };
+  const composerRoot=()=>{
+    const ed=editor();
+    return ed?.closest('input-container,fieldset,form')||ed?.parentElement?.parentElement?.parentElement||ed?.parentElement;
+  };
   const settleToolAnimations=()=>{
-    // Chrome pauses this finite entrance animation when its window is covered.
-    // Finish only the provider's tool drawer animation, without changing styles
-    // or treating a static hidden/disabled control as selected.
-    if(command.provider!=='Gemini')return;
-    for(const root of document.querySelectorAll('.ng-animating,input-container')){
-      for(const animation of root.getAnimations({subtree:true})){
+    // Covered Chrome windows can pause short entrance fades. Finish only finite
+    // animations in the task composer / Gemini research surface. Static hidden
+    // elements and infinite activity spinners remain hidden / active.
+    const roots=new Set([composerRoot()]);
+    if(command.provider==='Gemini'){
+      document.querySelectorAll('.ng-animating,input-container,deep-research-immersive-panel').forEach(el=>roots.add(el));
+    }
+    for(const root of roots){
+      for(const animation of root?.getAnimations({subtree:true})||[]){
         const timing=animation.effect?.getComputedTiming();
         if(timing&&Number.isFinite(timing.endTime)&&timing.endTime<=2000&&animation.playState!=='finished'){
           try{animation.finish();}catch{}
         }
       }
     }
+  };
+  const attachmentVisible=()=>{
+    const root=composerRoot();
+    if(!root||root.querySelector('[aria-busy="true"],[role="progressbar"]'))return false;
+    return [...root.querySelectorAll('[title],[aria-label],span,div,p,button')].some(el=>{
+      if(!visible(el)||el.closest(spec.assistant+','+spec.user+',nav,aside'))return false;
+      // Card titles / accessible names survive filename wrapping and nested spans.
+      const name=el.getAttribute('title')||el.getAttribute('aria-label')||(el.children.length===0?text(el):'');
+      return /^input-packet(?:\.md)?$/i.test(name.trim());
+    });
   };
   const modeSelected=()=>{
     const matches=controls().filter(el=>researchNames.includes(label(el)));
@@ -89,11 +106,12 @@ globalThis.__openNotebookResearchDriver = async function(command) {
     const quotaText=notices+'\n'+[...document.querySelectorAll('[role="menu"],[role="tooltip"],[data-radix-popper-content-wrapper]')].filter(visible).map(text).join('\n');
     const quota=/usage limit reached|limitine ulaştın|limitinize ulaştınız|research limit|araştırma sınırına|out of research|no research left|you(?:’|')ve (?:used|reached).{0,50}(?:research|limit)|0 (?:deep research|research|araştırma).{0,20}(?:remaining|left|kaldı)|araştırma.{0,35}(?:hakkınız kalmadı|kotası doldu|limit.{0,15}ulaşt)/i.test(quotaText);
     const assistant=assistantText();
+    const complete=completeRegex.test(assistant)||(command.provider==='Gemini'&&!![...document.querySelectorAll('deep-research-immersive-panel')].find(el=>visible(el)&&el.querySelector('deep-research-source-lists'))&&!!findControl(['Paylaş ve dışa aktar','Share & export','Share and export']));
     const user=[...document.querySelectorAll(spec.user)].filter(visible).map(text).join('\n');
-    return {url:location.href,sign_in_visible:signIn,challenge_visible:challenge,quota_visible:quota,
+    return {driver_version:'2026-09-24-background-readiness',url:location.href,sign_in_visible:signIn,challenge_visible:challenge,quota_visible:quota,
       research_frame:!!document.querySelector('iframe[src^="https://connector-openai-deep-research.web-sandbox.oaiusercontent.com"]'),composer_visible:!!editor(),tools_ready:!!findControl(spec.menus)||modeSelected(),research_selected:modeSelected(),send_ready:!!sendControl(),busy:busy(),
-      marker_present:!!command.marker&&user.includes(command.marker),plan_visible:!!planControl(),
-      research_progress:progressRegex.test(assistant)||controls().some(el=>/sources and counting.*Open research panel/i.test(label(el))),research_complete:completeRegex.test(assistant)||(command.provider==='Gemini'&&!![...document.querySelectorAll('deep-research-immersive-panel')].find(el=>visible(el)&&el.querySelector('deep-research-source-lists'))&&!!findControl(['Paylaş ve dışa aktar','Share & export','Share and export'])),
+      marker_present:!!command.marker&&user.includes(command.marker),plan_visible:!complete&&!!planControl(),
+      research_progress:progressRegex.test(assistant)||controls().some(el=>/sources and counting.*Open research panel/i.test(label(el))),research_complete:complete,
       assistant_chars:assistant.length};
   }
   const assertReady=()=>{
@@ -106,6 +124,7 @@ globalThis.__openNotebookResearchDriver = async function(command) {
   try{
     if(!spec||location.protocol!=='https:'||location.hostname!==spec.host)fail('İzin verilmeyen sağlayıcı sayfası.','login_required');
     if(!(command.expires_at*1000>Date.now()))fail('Görev süresi doldu.','interrupted');
+    settleToolAnimations();
     if(command.op==='inspect')return inspect();
     if(command.op==='diagnose'){
       const ed=editor();
@@ -142,7 +161,6 @@ globalThis.__openNotebookResearchDriver = async function(command) {
       let ed=editor();if(!ed)fail('İstem yazma alanı bulunamadı.');
       const short='Ekli input-packet.md dosyasındaki görevi ve önceki raporların tamamını kullan. Dosyayı tamamen inceleyerek seçili araştırma modunda çalış. Soru sorma; makul varsayımları belirt. Görev kimliği: '+command.marker;
       const input=full.length>18000?short:full;
-      const attachmentVisible=()=>[...document.querySelectorAll('span,div,p,button')].some(el=>visible(el)&&el.children.length===0&&/^input-packet(?:\.md)?$/i.test(text(el)));
       if(normalize(ed.value||text(ed)).endsWith(normalize(input))){
         if(full.length>18000&&!attachmentVisible())fail('Görev metni var ancak tam paket dosyası doğrulanamadı.');
         return {...inspect(),prepared:true};
@@ -190,7 +208,9 @@ globalThis.__openNotebookResearchDriver = async function(command) {
     }
     if(command.op==='start_plan'){
       if(!command.marker||![...document.querySelectorAll(spec.user)].filter(visible).some(el=>text(el).includes(command.marker)))fail('Araştırma planı görev kimliğiyle eşleştirilemedi.','submission_uncertain');
-      const plan=planControl();if(!plan)return {...inspect(),clicked:false};
+      const state=inspect();
+      if(state.research_complete||state.busy)return {...state,clicked:false};
+      const plan=planControl();if(!plan)return {...state,clicked:false};
       plan.click();return {url:location.href,clicked:true};
     }
     if(command.op==='collect'){

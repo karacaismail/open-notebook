@@ -170,6 +170,11 @@ async def test_extension_driver_real_dom():
             ctx,page,result=await run('Gemini',html.replace('<button ','<button style="display:none" '),'start_plan')
             assert result['clicked'] is False
             await ctx.close()
+            # A plan's own "Start researching" text is not proof of active research.
+            html='<user-query>ON-test-marker</user-query><model-response><button onclick="window.started=true">Start researching</button></model-response>'
+            ctx,page,result=await run('Gemini',html,'start_plan')
+            assert result['clicked'] and await page.evaluate('window.started') is True
+            await ctx.close()
             # A finite paused entrance animation may finish, but static hidden
             # controls remain rejected by the negative cases above.
             html='<div class="ng-animating"><button aria-label="Deep Research öğesinin seçimini kaldır">x</button></div><script>const a=document.querySelector(".ng-animating").animate([{opacity:0},{opacity:1}],{duration:250,fill:"both"});a.pause();</script>'
@@ -237,3 +242,116 @@ async def test_quota_in_tool_menu_is_classified_before_missing_research_control(
         result=await page.evaluate('()=>__openNotebookResearchDriver({op:"select_research",provider:"ChatGPT",params:{},expires_at:Date.now()/1000+30})')
         assert result['error']['kind']=='quota_wait'
         await ctx.close();await browser.close()
+
+
+@pytest.mark.asyncio
+async def test_background_attachment_and_report_readiness():
+    """Provider-owned finite fades may stall in an unfocused research window."""
+    async with async_playwright() as pw:
+        browser=await pw.chromium.launch(channel='chrome',headless=True)
+        ctx=await browser.new_context()
+        await ctx.route('**/*',lambda route:route.fulfill(content_type='text/html',body='<html></html>'))
+        page=await ctx.new_page();await page.goto('https://claude.ai/new')
+        script=(PACKAGE/'dom-driver.js').read_text()
+        prompt='Full evidence '*1600+' ON-test-marker'
+        args={'op':'fill','provider':'Claude','marker':'ON-test-marker','params':{'text':prompt},'expires_at':time.time()+120}
+        composer='<fieldset><button aria-pressed="true">Research mode</button><div class="ProseMirror" contenteditable="true"></div>'
+        tile='<span data-cds="CardLink" role="button" title="input-packet.md"><span>input-<br>packet.md</span></span>'
+        await page.set_content(composer+tile+'</fieldset>')
+        await page.evaluate("""()=>{const a=document.querySelector('[data-cds="CardLink"]').animate([{opacity:0},{opacity:1}],{duration:250,fill:'both'});a.pause();}""")
+        await page.evaluate(script)
+        result=await page.evaluate('(a)=>__openNotebookResearchDriver(a)',args)
+        assert result.get('prepared') is True, result
+        # A static hidden attachment, or an identically named sidebar item, is not proof.
+        for html in [composer+'<div style="display:none">'+tile+'</div></fieldset>',
+                     '<nav>'+tile+'</nav>'+composer+'</fieldset>']:
+            await page.set_content(html);await page.evaluate(script)
+            result=await page.evaluate('(a)=>__openNotebookResearchDriver(a)',args)
+            assert result.get('error') and not result.get('prepared')
+        await page.goto('https://gemini.google.com/app/test')
+        html='<user-query>ON-test-marker</user-query><button onclick="window.started=true">Start research</button><deep-research-immersive-panel><h1>Verified final report</h1><p>'+('Evidence '*200)+'</p><deep-research-source-lists><a href="https://example.org/source">Source</a></deep-research-source-lists><button>Share &amp; export</button></deep-research-immersive-panel>'
+        await page.set_content(html)
+        await page.evaluate("""()=>{const a=document.querySelector('deep-research-immersive-panel').animate([{opacity:0},{opacity:1}],{duration:250,fill:'both'});a.pause();}""")
+        await page.evaluate(script)
+        cmd={'op':'inspect','provider':'Gemini','marker':'ON-test-marker','params':{},'expires_at':time.time()+60}
+        result=await page.evaluate('(a)=>__openNotebookResearchDriver(a)',cmd)
+        assert result['research_complete'] and not result['plan_visible']
+        cmd['op']='start_plan';result=await page.evaluate('(a)=>__openNotebookResearchDriver(a)',cmd)
+        assert not result.get('clicked') and not await page.evaluate('!!window.started')
+        cmd['op']='collect';result=await page.evaluate('(a)=>__openNotebookResearchDriver(a)',cmd)
+        assert result['report'] and 'Verified final report' in result['report']['html']
+        await ctx.close();await browser.close()
+
+
+@pytest.mark.asyncio
+async def test_monitor_window_renews_without_resubmission_or_old_plan_click(tmp_path):
+    from extension_research import ExtensionResearch
+    from workflow import digest
+    class Bridge:
+        def __init__(self):self.ops=[]
+        async def request(self,op,*args,**kwargs):
+            self.ops.append(op)
+            state={'url':'https://gemini.google.com/app/finished','marker_present':True,
+                   'research_complete':True,'plan_visible':True,'research_progress':False}
+            if op=='collect':return dict(state,report={'html':'<h1>Final report</h1><p>'+('Evidence '*200)+'</p><a href="https://example.org/primary">Source</a>', 'links':[], 'completion':{'explicit':True}})
+            return state
+    class Runtime:
+        def __init__(self):self.bridge=Bridge()
+        async def state(self,*args,**kwargs):return {'url':'https://gemini.google.com/app/finished','marker_present':True}
+    runtime=Runtime();driver=ExtensionResearch(runtime,tmp_path,timeout=.001,poll_seconds=.002,max_watch_seconds=1)
+    rid='a'*32;sid='research_gemini';prompt='Original evidence'
+    driver.save(rid,sid,{'phase':'submitted','transport':'extension','provider':'Gemini','url':'https://gemini.google.com/app/finished',
+                        'marker':'ON-test-marker','prompt_sha256':digest(prompt),'research_started':False})
+    progress=[]
+    async def record(value):progress.append(value)
+    result=await driver.research(rid,{'id':sid,'provider':'Gemini'},prompt,record)
+    assert 'Final report' in result['content']
+    assert all(op not in runtime.bridge.ops for op in ('fill','submit','start_plan'))
+    assert any(item['phase']=='monitoring' for item in progress)
+    assert driver.load(rid,sid)['phase']=='completed'
+
+
+@pytest.mark.asyncio
+async def test_monitor_does_not_renew_without_confirmed_conversation(tmp_path):
+    from extension_research import ExtensionResearch
+    from workflow import digest
+    class Bridge:
+        async def request(self,op,*args,**kwargs):
+            return {'url':'https://gemini.google.com/app','marker_present':False,'report':None}
+    class Runtime:
+        bridge=Bridge()
+        async def state(self,*args,**kwargs):return {'url':'https://gemini.google.com/app'}
+    driver=ExtensionResearch(Runtime(),tmp_path,timeout=.001,poll_seconds=.002,max_watch_seconds=1)
+    rid='b'*32;sid='research_gemini';prompt='Original evidence'
+    driver.save(rid,sid,{'phase':'submitted','transport':'extension','provider':'Gemini','url':None,
+                        'marker':'ON-test-marker','prompt_sha256':digest(prompt),'research_started':False})
+    async def progress(value):pass
+    with pytest.raises(BrowserAttention) as error:
+        await driver.research(rid,{'id':sid,'provider':'Gemini'},prompt,progress)
+    assert error.value.kind=='interrupted'
+
+
+@pytest.mark.asyncio
+async def test_monitor_remains_bounded_when_provider_never_finishes(tmp_path):
+    from extension_research import ExtensionResearch
+    from workflow import digest
+    class Bridge:
+        def __init__(self):self.ops=[]
+        async def request(self,op,*args,**kwargs):
+            self.ops.append(op)
+            return {'url':'https://gemini.google.com/app/waiting','marker_present':True,'research_progress':True,'report':None}
+    class Runtime:
+        def __init__(self):self.bridge=Bridge()
+        async def state(self,*args,**kwargs):return {'url':'https://gemini.google.com/app/waiting','marker_present':True}
+    runtime=Runtime();driver=ExtensionResearch(runtime,tmp_path,timeout=.005,poll_seconds=.002,max_watch_seconds=.02)
+    rid='c'*32;sid='research_gemini';prompt='Original evidence'
+    driver.save(rid,sid,{'phase':'researching','transport':'extension','provider':'Gemini','url':'https://gemini.google.com/app/waiting',
+                        'marker':'ON-test-marker','prompt_sha256':digest(prompt),'research_started':True})
+    progress=[]
+    async def record(value):progress.append(value)
+    with pytest.raises(BrowserAttention) as error:
+        await driver.research(rid,{'id':sid,'provider':'Gemini'},prompt,record)
+    assert error.value.kind=='interrupted'
+    assert all(op not in runtime.bridge.ops for op in ('fill','submit','start_plan'))
+    assert any(item['phase']=='monitoring' for item in progress)
+    assert driver.load(rid,sid)['phase']=='researching'
