@@ -22,6 +22,12 @@ Updated: 2026-09-24. Scope: continuing research safely when one parallel provide
 - A confirmed conversation renews its two-hour observation window up to a 24-hour cap per monitoring session. Renewal only observes the existing conversation; it never uploads or submits the question again. Unconfirmed conversations still stop for review, and user stop/pause controls remain effective.
 - Browser tests cover hidden and wrapped attachments, unrelated sidebar cards, completion beside an old plan, report recovery, a bounded monitor and the absence of any second submission.
 
+## Re-research packet recovery (2026-09-24)
+
+Malformed or nested code fences in a provider report must not absorb later reports into one oversized block. The partitioner now checks each serialized report/attachment boundary against its exact UTF-8 byte length and confines an unfinished fence to that frame. It does not edit the original report, remove fence characters, split genuine oversized code blocks, or increase model budgets. Invalid byte lengths or boundary labels still block submission.
+
+Regression tests reproduce nested and unclosed fences, multibyte text, corrupted framing and an actually oversized code block. Real-packet validation reconstructed all 543,508 evidence bytes from 13 parts and produced an identical plan for both review providers. This establishes byte preservation and budget admission, not semantic completeness of generated findings. Existing completed reports and submitted subrequest journals remain immutable.
+
 ## Planned next increments — not implemented
 
 | Priority | Capability | Acceptance criteria |

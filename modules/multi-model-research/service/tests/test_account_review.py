@@ -33,6 +33,57 @@ def test_parts_preserve_utf8_paragraphs_tables_and_mermaid_fences():
         partition('```text\n' + 'x' * 1000 + '\n```', lambda s: len(s) < 600)
 
 
+def framed_evidence(contents):
+    from packet_markdown import markdown_packet
+    return markdown_packet({'question': 'Araştırma?', 'scope': '', 'reports': [
+        {'stage': 'research_' + str(i), 'content': content, 'evidence': [], 'citations': []}
+        for i, content in enumerate(contents)
+    ]})
+
+
+@pytest.mark.parametrize('broken', [
+    '```evidence-ledger\nevidence-ledger\n\n```evidence-ledger\n{"claims":[]}\n```\n```',
+    '~~~text\nAn unfinished fence.\n',
+    '````text\nA shorter fence does not close this.\n```',
+])
+def test_unclosed_report_fence_cannot_swallow_later_reports(broken):
+    from review_contract import partition
+    from context_preparation import render_segment
+    intact = ('Yalnız kuru ortamda geçerlidir; ıslakken geçersizdir.\n\n' * 55
+              + '```mermaid\ngraph TD\nA --> B\n```\n\n')
+    text = framed_evidence([broken, intact])
+    plan = partition(text, lambda value: len(value) < 1800)
+    assert validate_plan(plan, text)
+    assert ''.join(p['text'] for p in plan['parts']).encode() == text.encode()
+    assert len(plan['parts']) > 1
+    assert all(len(render_segment(p, plan)) < 1800 for p in plan['parts'])
+    assert any(broken in p['text'] for p in plan['parts'])
+    assert any('```mermaid\ngraph TD\nA --> B\n```' in p['text'] for p in plan['parts'])
+    assert partition(text, lambda value: len(value) < 1800) == plan
+
+
+def test_report_boundaries_are_byte_checked_not_guessed_from_fence_text():
+    from review_contract import blocks
+    broken = '```text\nKoşul: yağmurda değil.\n'
+    text = framed_evidence([broken, 'Independent report.\n\n'])
+    for damaged in (
+        text.replace('UTF-8 bytes: ' + str(len(broken.encode())), 'UTF-8 bytes: 1', 1),
+        text.replace('_research_0_content\n\n## Report:', '_wrong_content\n\n## Report:', 1),
+    ):
+        with pytest.raises(PreparationError, match='boundary'):
+            blocks(damaged)
+    # A marker inside ordinary source code is never an authorized packet boundary.
+    code = '```text\nEND_REFERENCE_' + 'a' * 64 + '_research_0_content\n\nTail.\n```\n'
+    assert blocks(code) == [code]
+
+
+def test_oversized_real_code_block_is_still_rejected_without_truncation():
+    from review_contract import partition
+    text = framed_evidence(['```text\n' + 'x' * 3000 + '\n```', 'Next report.'])
+    with pytest.raises(PreparationError, match='indivisible'):
+        partition(text, lambda value: len(value) < 1800)
+
+
 def sample():
     return {'coverage': ['P1'], 'findings': [{'statement': 'Conditional finding.',
         'status': 'supported', 'prior_claim_ids': ['C1'],

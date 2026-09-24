@@ -16,11 +16,42 @@ class SchemaRepairNeeded(PreparationError):
     """Only additive/type-equivalent repairs are eligible for another account call."""
 
 
+def packet_boundaries(text):
+    """Locate text-frame ends by their serialized UTF-8 lengths, not source Markdown.
+
+    A provider can return malformed fences. Those fences cannot extend beyond
+    the enclosing report/attachment in a complete markdown-v2 packet. Ordinary
+    Markdown and partial neighbor excerpts have no authoritative frame boundary.
+    """
+    data = text.encode('utf-8')
+    opening = re.match(rb'BEGIN_(REFERENCE_[a-f0-9]{64}_*)\n\n', data)
+    if not opening or not data.endswith(b'END_' + opening[1] + b'\n'):
+        return set()
+    marker = re.escape(opening[1])
+    header = re.compile(
+        rb'^### ([A-Za-z0-9_]+) \xc2\xb7 UTF-8 bytes: ([0-9]+)\n\nBEGIN_'
+        + marker + rb'_\1\n\n', re.M)
+    position, boundaries = opening.end(), set()
+    while match := header.search(data, position):
+        end = match.end() + int(match[2])
+        closing = b'\n\nEND_' + opening[1] + b'_' + match[1] + b'\n\n'
+        if data[end:end + len(closing)] != closing:
+            raise PreparationError('A serialized evidence boundary failed its UTF-8 length check.')
+        boundaries.add(end + 2)
+        # Skip the entire original body: lookalike headers inside it are data.
+        position = end + len(closing)
+    return boundaries
+
+
 def blocks(text):
-    """Never split a paragraph, table or fenced block; a closing fence is not an opener."""
+    """Keep Markdown units intact, with fences confined to verified text frames."""
     result, current, fence = [], [], None
+    boundaries, offset = packet_boundaries(text), 0
     for line in text.splitlines(keepends=True):
+        if fence and offset in boundaries:
+            result.append(''.join(current)); current = []; fence = None
         current.append(line)
+        offset += len(line.encode('utf-8'))
         mark = re.match(r'^ {0,3}(`{3,}|~{3,})(.*)$', line.rstrip('\r\n'))
         if fence:
             if mark and mark[1][0] == fence[0] and len(mark[1]) >= len(fence) and not mark[2].strip():
