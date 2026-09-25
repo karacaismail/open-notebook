@@ -121,6 +121,22 @@ def read_object(text):
     return result
 
 
+def read_working_object(text):
+    """Read one explicit JSON artifact, retaining all surrounding provider prose."""
+    if len(text.encode()) > 2 * 1024 * 1024:
+        raise PreparationError('The structured response size exceeds the safe parsing limit; nothing was truncated.')
+    try: return read_object(text), None
+    except PreparationError as original_error:
+        matches = list(re.finditer(r'^```json[ \t]*\r?\n(.*?)^```[ \t]*(?=\r?$)', text, re.M | re.S))
+        if len(matches) != 1: raise original_error
+        match = matches[0]; prefix = text[:match.start()]; suffix = text[match.end():]
+        if re.search(r'^ {0,3}(`{3,}|~{3,})', prefix + suffix, re.M): raise original_error
+        body = match[1]; value = read_object(body)
+        return value, {'kind':'explicit-json-artifact-v1', 'prefix':prefix, 'suffix':suffix,
+            'response_sha256':digest(text), 'artifact_sha256':digest(body),
+            'start_byte':len(text[:match.start(1)].encode()), 'end_byte':len(text[:match.end(1)].encode())}
+
+
 def exact_ids(value, expected):
     return isinstance(value, list) and all(isinstance(s, str) for s in value) and sorted(value) == sorted(expected)
 
@@ -172,7 +188,8 @@ def downgrade(row):
 def parse_map(text, part_id, original, claim_ids, claim_catalog=None, quote_repair=None, preserve_unsourced=False):
     if len(text.encode('utf-8')) > 2 * 1024 * 1024:
         raise PreparationError('The structured response size exceeds the safe parsing limit; nothing was truncated.')
-    result = read_object(text)
+    result, provider_envelope = read_working_object(text)
+    result.pop('provider_envelope', None)
     if not exact_ids(result.get('coverage'), [part_id]):
         if result.get('coverage')==part_id:
             raise SchemaRepairNeeded('coverage must be an array containing the part ID, not a scalar.')
@@ -241,6 +258,7 @@ def parse_map(text, part_id, original, claim_ids, claim_catalog=None, quote_repa
         raise PreparationError('Unexpected quotation repair for an already matching response.')
     if not part_anchors:
         raise PreparationError('No finding anchors to the actual evidence part; shared or repaired quotes cannot establish part coverage.')
+    if provider_envelope: result['provider_envelope'] = provider_envelope
     return result
 
 
@@ -255,7 +273,10 @@ def parse_merge(text, part_ids, finding_ids):
 
 def validate_repair(original, repaired):
     """A format repair may fill missing fields, never rewrite or drop recorded evidence."""
-    before, after = read_object(original), read_object(repaired)
+    before, original_envelope = read_working_object(original)
+    after, repaired_envelope = read_working_object(repaired)
+    if repaired_envelope and (not original_envelope or any(repaired_envelope[k] != original_envelope[k] for k in ('prefix','suffix'))):
+        raise PreparationError('Structured repair introduced unrecorded surrounding prose.')
     if not isinstance(before.get('findings'),list) or not isinstance(after.get('findings'),list) or len(before['findings'])!=len(after['findings']):
         raise PreparationError('Structured repair removed or added a finding.')
     for key in ('coverage','blind_spots','dependencies'):

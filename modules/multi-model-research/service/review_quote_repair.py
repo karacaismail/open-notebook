@@ -7,7 +7,7 @@ import difflib
 import re
 
 from context_preparation import PreparationError, digest
-from review_contract import read_object
+from review_contract import read_object, read_working_object
 
 QUOTE_REPAIR_INSTRUCTIONS = '''Associate the listed incomplete model quotations with exact passages from the supplied evidence part.
 Do not use tools, search, read other files, invent information, or change any existing finding.
@@ -35,7 +35,7 @@ def validate_quote_repair(proposal, response, original, indexes):
                    or type(r['finding_index']) is not int for r in rows)
             or sorted(r['finding_index'] for r in rows) != sorted(indexes)):
         raise PreparationError('Quotation repair must cover exactly the mismatched findings once.')
-    findings = read_object(response)['findings']; anchors = {}
+    findings = read_working_object(response)[0]['findings']; anchors = {}
     for row in rows:
         quote = row['source_quote']; model_quote = findings[row['finding_index'] - 1]['original_quote']
         if (not isinstance(quote, str) or not 40 <= len(quote) <= 8192 or len(model_quote) < 40

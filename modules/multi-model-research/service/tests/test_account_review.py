@@ -166,7 +166,7 @@ def test_redirects_are_revalidated_and_limited(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('fault', [None, 'repair', 'unmatched', 'unavailable', 'no_search', 'source_mismatch', 'lost_connection', 'missing_finding', 'oversized_merge'])
+@pytest.mark.parametrize('fault', [None, 'repair', 'wrapped', 'wrapped_repair', 'unmatched', 'unavailable', 'no_search', 'source_mismatch', 'lost_connection', 'missing_finding', 'oversized_merge'])
 async def test_durable_research_checks_sources_reconciles_and_does_not_repeat(tmp_path, monkeypatch, fault):
     import asyncio
     import review_execution
@@ -198,9 +198,10 @@ async def test_durable_research_checks_sources_reconciles_and_does_not_repeat(tm
                 result=sample();result['coverage']=[data['part_id']]
                 part=next(p for p in plan['parts'] if p['id']==data['part_id'])
                 result['findings'][0]['original_quote']=part['text'].strip().split('\n')[0]
-                if fault=='repair':del result['findings'][0]['prior_assessments']
+                if fault in ('repair','wrapped_repair'):del result['findings'][0]['prior_assessments']
             elif 'recorded_response' in data:
-                result=json.loads(data['recorded_response'])
+                from review_contract import read_working_object
+                result=read_working_object(data['recorded_response'])[0]
                 result['findings'][0]['prior_assessments']=sample()['findings'][0]['prior_assessments']
             else:
                 ids=[f['id'] for node in data['working_findings'] for f in node['findings']]
@@ -213,7 +214,10 @@ async def test_durable_research_checks_sources_reconciles_and_does_not_repeat(tm
                         for node in data['working_findings'] for f in node['findings'])
                     assert 'must remain unverified' in request
                 result={'coverage':data['coverage'],'reviewed_findings':ids,'report':'Not safe when wet; the dry-condition result does not generalize.'}
-            return json.dumps(result),{'execution':{'searched':fault!='no_search','read_sources':True,'unexpected_tools':[]}}
+            response=json.dumps(result)
+            if child['account_profile']=='research_review' and fault in ('wrapped','wrapped_repair'):
+                response='Provider note: the wet-weather trial is missing.\n```json\n'+response+'\n```'
+            return response,{'execution':{'searched':fault!='no_search','read_sources':True,'unexpected_tools':[]}}
     class Store:
         async def save(self,value):pass
     class Engine:
@@ -233,7 +237,7 @@ async def test_durable_research_checks_sources_reconciles_and_does_not_repeat(tm
         return original_verify(self, source)
     monkeypatch.setattr(review_execution.SourceReader,'verify',verify)
     engine=Engine()
-    if fault and fault not in ('repair', 'unmatched', 'unavailable'):
+    if fault and fault not in ('repair', 'wrapped', 'wrapped_repair', 'unmatched', 'unavailable'):
         with pytest.raises(ServiceError) as error:await review_execution.execute(engine,run,stage,prompt)
         expected='submission_uncertain' if fault=='lost_connection' else 'context_limit' if fault=='oversized_merge' else 'integrity_error'
         assert error.value.kind==expected
@@ -248,9 +252,13 @@ async def test_durable_research_checks_sources_reconciles_and_does_not_repeat(tm
     assert 'Wet conditions invalidate it.' in report and 'Not universal.' in report
     assert '```evidence-ledger' in report and 'source-passage matching' in report
     assert usage['coverage']==[p['id'] for p in plan['parts']]
-    expected_calls=len(plan['parts'])*(2 if fault=='repair' else 1)+1
+    expected_calls=len(plan['parts'])*(2 if fault in ('repair','wrapped_repair') else 1)+1
     assert len(engine.provider.calls)==expected_calls
     final_request=engine.provider.calls[-1][1]
+    if fault in ('wrapped','wrapped_repair'):
+        assert 'Provider note: the wet-weather trial is missing.' in final_request
+        assert 'Provider note: the wet-weather trial is missing.' in report
+        assert 'Preserved provider notes' in report
     assert final_request.count('"verification":"passage_matched_not_fact_checked"')==(0 if fault in ('unmatched', 'unavailable') else 1)
     if fault in ('unmatched', 'unavailable'):
         assert usage['source_passages_matched'] == 0 and usage['source_passages_unverified'] == 1

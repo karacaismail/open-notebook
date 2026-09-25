@@ -58,6 +58,12 @@ Existing partial receipts remain unchanged; a separately hashed artifact can be
 recovered through a read-only request. Source and record checks still apply. See
 [ADR-021](decisions/ADR-021-cli-output-continuation-artifacts.md).
 
+A single explicit JSON artifact can also be read when a provider adds surrounding
+prose. All such prose remains in a separately hashed provider envelope, is passed
+to reconciliation as untrusted context and is preserved in the final appendix.
+Ambiguous or invalid artifacts still block. See
+[ADR-022](decisions/ADR-022-preserved-research-json-envelopes.md).
+
 ## Planned next increments — not implemented
 
 | Priority | Capability | Acceptance criteria |
