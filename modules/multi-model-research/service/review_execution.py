@@ -39,6 +39,20 @@ def encoded(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
+def unresolved_quote_notice(nodes):
+    count = sum(f.get('original_anchor', {}).get('scope') == 'unresolved_part_quote'
+                for node in nodes for f in node['findings'])
+    if not count: return ''
+    return ('\n\n## Unresolved original quotations / Eşleşmeyen özgün alıntılar\n\n'
+        + str(count) + ' findings could not be anchored to their original evidence part after one bounded repair. '
+        'Their original quotations, statements, sources and model opinions are preserved without correction. '
+        'They and their linked prior assessments remain unverified; do not use them as support, rejection, '
+        'part coverage, or a basis for a decision. A public-source match cannot resolve missing original provenance. '
+        'These records have original_anchor.scope=unresolved_part_quote and no invented source text or byte offsets. '
+        'Özgün kaynakla eşleşmeyen bu kayıtlar silinmedi veya düzeltilmiş sayılmadı; doğrulanmamış olarak '
+        'ayrı tutuldu ve karar dayanağı ya da parça kapsamının kanıtı sayılmadı.\n')
+
+
 def retain_recovered_artifact(job, response, usage):
     """Supplement, never replace, the original completed response and its hash."""
     proof = usage.get('artifact_recovery', {})
@@ -125,6 +139,8 @@ def ledger(plan, nodes, stage_id):
             'counter_sources': [s['url'] for s in finding['sources']] if finding['status'] in ('disputed','rejected') else [],
             'reason': ('Original passage belongs to shared claim context, not this evidence part; assessment remains unverified.'
                        if finding.get('original_anchor', {}).get('scope') == 'claim_catalog' else
+                       'Original quotation provenance is unresolved after an unsuccessful repair; this record is not accepted evidence and remains unverified.'
+                       if finding.get('original_anchor', {}).get('scope') == 'unresolved_part_quote' else
                        'Original model quote was incomplete; the exact repaired source passage is retained separately and the assessment remains unverified.'
                        if finding.get('original_anchor', {}).get('scope') == 'repaired_part_quote' else
                        'No public source was supplied; this observation is preserved but is not verified research evidence.'
@@ -292,7 +308,8 @@ class ReviewRunner:
             # Its response adds provenance only; the research response is immutable.
             proposal, _ = await self.call('quote-anchor-' + part['id'], request, 'review_merge')
             return parse_map(response, part['id'], part['text'], known_claims,
-                             self.plan['claim_catalog'], quote_repair=proposal, preserve_unsourced=True)
+                             self.plan['claim_catalog'], quote_repair=proposal, preserve_unsourced=True,
+                             preserve_unanchored=True)
 
     async def execute(self):
         from engine import ServiceError
@@ -343,11 +360,14 @@ class ReviewRunner:
                 nodes.append(node)
             ids = [p['id'] for p in self.plan['parts']]
             finding_ids = [f['id'] for node in nodes for f in node['findings']]
-            request = MERGE_INSTRUCTIONS + VERIFICATION_INSTRUCTIONS + envelope(encoded({'brief': self.plan['brief'], 'coverage': ids,
+            unresolved_notice = unresolved_quote_notice(nodes)
+            request = MERGE_INSTRUCTIONS + VERIFICATION_INSTRUCTIONS + unresolved_notice + envelope(encoded({'brief': self.plan['brief'], 'coverage': ids,
                 'source_sha256': self.plan['source_sha256'], 'prior_claim_register': self.plan['protected_register'],
                 'working_findings': nodes, 'source_receipts':receipts}))
             response, _ = await self.call('reconcile', request, 'review_merge')
             report = parse_merge(response, ids, finding_ids)
+            # Always expose unresolved provenance even if the model omits it.
+            report += unresolved_notice
             allowed = set(citations(body)) | {s['url'] for n in nodes for f in n['findings'] for s in f['sources']}
             if set(citations(report))-allowed: raise PreparationError('Reconciliation invented an unprovided source URL.')
             matched = sum(r['verification'] == 'passage_matched_not_fact_checked' for r in receipts.values())

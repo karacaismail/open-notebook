@@ -185,7 +185,7 @@ def downgrade(row):
         assessment.setdefault('model_status', assessment['status']); assessment['status'] = 'unverified'
 
 
-def parse_map(text, part_id, original, claim_ids, claim_catalog=None, quote_repair=None, preserve_unsourced=False):
+def parse_map(text, part_id, original, claim_ids, claim_catalog=None, quote_repair=None, preserve_unsourced=False, preserve_unanchored=False):
     if len(text.encode('utf-8')) > 2 * 1024 * 1024:
         raise PreparationError('The structured response size exceeds the safe parsing limit; nothing was truncated.')
     result, provider_envelope = read_working_object(text)
@@ -249,7 +249,7 @@ def parse_map(text, part_id, original, claim_ids, claim_catalog=None, quote_repa
     if mismatches:
         if quote_repair is None: raise OriginalQuoteMismatch(mismatches)
         from review_quote_repair import validate_quote_repair
-        anchors = validate_quote_repair(quote_repair, text, original, mismatches)
+        anchors = validate_quote_repair(quote_repair, text, original, mismatches, preserve_unanchored=preserve_unanchored)
         for index, anchor in anchors.items():
             row = findings[index - 1]
             row['original_anchor'] = anchor
