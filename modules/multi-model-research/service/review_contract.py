@@ -123,7 +123,41 @@ def strings(value):
     return isinstance(value, list) and all(isinstance(s, str) and s.strip() for s in value)
 
 
-def parse_map(text, part_id, original, claim_ids):
+def original_anchor(quote, original, linked_ids, claim_catalog):
+    """Resolve presentation-only changes or explicitly label shared-context quotes."""
+    if quote in original: return None
+    # Only single backticks around a literal identifier may be presentation.
+    # Never normalize words, whitespace, punctuation, operators, or code fences.
+    removed = set()
+    offset = 0; fence = None
+    for unit in original.splitlines(keepends=True):
+        mark = re.match(r'^ {0,3}(`{3,}|~{3,})(.*)$', unit.rstrip('\r\n'))
+        if fence:
+            if mark and mark[1][0] == fence[0] and len(mark[1]) >= len(fence) and not mark[2].strip():
+                fence = None
+        elif mark:
+            fence = mark[1]
+        else:
+            for match in re.finditer(r'(?<!`)`([A-Za-z_][A-Za-z0-9_.:-]*)`(?!`)', unit):
+                removed.update((offset + match.start(), offset + match.end() - 1))
+        offset += len(unit)
+    positions = [i for i in range(len(original)) if i not in removed]
+    projected = ''.join(original[i] for i in positions)
+    found = projected.find(quote)
+    if found >= 0:
+        start, end = positions[found], positions[found + len(quote) - 1] + 1
+        if start - 1 in removed: start -= 1
+        if end in removed: end += 1
+        return {'scope': 'part', 'match': 'inline_identifier_markup', 'text': original[start:end],
+                'start_byte': len(original[:start].encode()), 'end_byte': len(original[:end].encode())}
+    for claim in claim_catalog or []:
+        if claim['id'] in linked_ids and len(quote) >= 12 and quote in claim['statement']:
+            return {'scope': 'claim_catalog', 'claim_id': claim['id'], 'text': quote,
+                    'counted_as_part_evidence': False}
+    raise PreparationError('A finding changed its original passage or used an invalid status.')
+
+
+def parse_map(text, part_id, original, claim_ids, claim_catalog=None):
     if len(text.encode('utf-8')) > 2 * 1024 * 1024:
         raise PreparationError('The structured response size exceeds the safe parsing limit; nothing was truncated.')
     result = read_object(text)
@@ -134,6 +168,7 @@ def parse_map(text, part_id, original, claim_ids):
     findings = result.get('findings')
     if not isinstance(findings, list) or not findings or len(findings) > 100:
         raise PreparationError('Re-research requires 1–100 complete findings per part; no silent clipping is allowed.')
+    part_anchors = 0
     for index, row in enumerate(findings, 1):
         if isinstance(row,dict):
             for key in ('conditions','counter_evidence','limits'):
@@ -141,17 +176,29 @@ def parse_map(text, part_id, original, claim_ids):
         if not isinstance(row, dict) or any(not isinstance(row.get(k), str) or not row[k].strip()
                 for k in ('statement', 'status', 'original_quote', 'conditions', 'counter_evidence', 'limits')):
             raise PreparationError('A finding omitted its statement, conditions, limitations or original passage.')
-        if row['status'] not in STATUSES or row['original_quote'] not in original:
+        if row['status'] not in STATUSES:
             raise PreparationError('A finding changed its original passage or used an invalid status.')
         if not strings(row.get('prior_claim_ids')) or not set(row['prior_claim_ids']) <= claim_ids:
             raise PreparationError('A finding invented a prior claim identity.')
+        # Provenance and verification metadata belong to this validator, not the model.
+        row.pop('original_anchor', None); row.pop('model_status', None); row.pop('verification', None)
+        anchor = original_anchor(row['original_quote'], original, row['prior_claim_ids'], claim_catalog)
+        if anchor: row['original_anchor'] = anchor
+        if not anchor or anchor['scope'] == 'part': part_anchors += 1
         assessments=row.get('prior_assessments')
         if (not isinstance(assessments,list) or any(not isinstance(a,dict) for a in assessments)
                 or not exact_ids([a.get('id') for a in assessments],row['prior_claim_ids'])):
             raise SchemaRepairNeeded('Each linked prior claim requires its own explicit assessment; one finding status cannot stand for conflicting claims.')
         for assessment in assessments:
+            assessment.pop('model_status', None)
             if assessment.get('status') not in STATUSES or not isinstance(assessment.get('reason'),str) or not assessment['reason'].strip():
                 raise PreparationError('A prior claim assessment requires its own status and reason.')
+        if anchor and anchor['scope'] == 'claim_catalog':
+            # Shared context is genuine supplied data, but is not this part's
+            # evidence. Preserve it without claiming verification of part coverage.
+            row['model_status'], row['status'] = row['status'], 'unverified'
+            for assessment in assessments:
+                assessment['model_status'], assessment['status'] = assessment['status'], 'unverified'
         if not isinstance(row.get('sources'), list) or not row['sources']:
             raise PreparationError('Every new finding needs source passages.')
         for source in row['sources']:
@@ -160,6 +207,8 @@ def parse_map(text, part_id, original, claim_ids):
                     or not isinstance(source.get('quote'), str) or not source['quote'].strip()):
                 raise PreparationError('A source needs a direct public URL and a verbatim passage.')
         row['id'] = part_id + ':F' + str(index)
+    if not part_anchors:
+        raise PreparationError('No finding anchors to the actual evidence part; shared context cannot establish part coverage.')
     if not strings(result.get('blind_spots')) or not strings(result.get('dependencies')):
         raise PreparationError('Missing explicit blind-spot or cross-part dependency records.')
     return result

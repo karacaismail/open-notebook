@@ -48,8 +48,31 @@ async def test_review_resumes_saved_response_without_resubmission(tmp_path):
     engine = type('Engine', (), {'provider': provider,
         'input_path': lambda *a: tmp_path / 'input.md', 'measure_input': lambda *a: {'fits': True}})()
     runner = ReviewRunner(engine, {'id': 'test'}, {'provider': 'ChatGPT'}, 'Input')
+    runner.progress = AsyncMock()
     runner.state = {'jobs': {'P1': {'input_sha256': digest('Frozen evidence'),
                                   'status': 'in_flight', 'request_id': 'a' * 32}}}
     assert (await runner.call('P1', 'Frozen evidence', 'research_review'))[0] == 'Saved report'
     assert json.loads(runner.path.read_text())['jobs']['P1']['status'] == 'completed'
     assert provider.synthesize.await_count == 0
+    assert runner.progress.call_args.args[-1] == 'a' * 32
+
+
+@pytest.mark.asyncio
+async def test_pending_recovery_observes_same_request_until_saved(tmp_path, monkeypatch):
+    import engine
+    provider=AccountProvider(tmp_path/'key')
+    provider.recover=AsyncMock(side_effect=[
+        ServiceError('Pending',409,kind='submission_uncertain',pending=True), ('Saved report',{})])
+    sleep=AsyncMock();monkeypatch.setattr(engine.asyncio,'sleep',sleep)
+    stage={'request_id':'a'*32}
+    assert (await provider.recover_pending(stage,'Frozen input'))[0]=='Saved report'
+    assert provider.recover.call_args_list[0]==provider.recover.call_args_list[1]
+    assert sleep.await_count==1
+
+
+@pytest.mark.asyncio
+async def test_unknown_receipt_is_not_polled_or_resubmitted(tmp_path):
+    provider=AccountProvider(tmp_path/'key')
+    provider.recover=AsyncMock(side_effect=ServiceError('Unknown',409,kind='submission_uncertain'))
+    with pytest.raises(ServiceError):await provider.recover_pending({'request_id':'a'*32},'Frozen input')
+    assert provider.recover.await_count==1

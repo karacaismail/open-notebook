@@ -21,8 +21,8 @@ from research_rules import ResearchRules
 from stage_controls import StageControls
 
 class ServiceError(Exception):
-    def __init__(self,message,status=400,kind=None,policy=None,settled=False):
-        super().__init__(message);self.status=status;self.kind=kind;self.policy=policy;self.settled=settled
+    def __init__(self,message,status=400,kind=None,policy=None,settled=False,pending=False):
+        super().__init__(message);self.status=status;self.kind=kind;self.policy=policy;self.settled=settled;self.pending=pending
 
 class AccountProvider:
     def __init__(self,key_path,timeout=3900):
@@ -55,11 +55,20 @@ class AccountProvider:
                 payload['error']['retry_at']=datetime.fromtimestamp(saved['retry_at'],timezone.utc).isoformat()
             return self.parse_response(httpx.Response(saved['status'],json=payload))
         if saved.get('state')!='completed':
-            raise ServiceError('The request is still pending; no duplicate was sent.',409,kind='submission_uncertain')
+            raise ServiceError('The request is still pending; no duplicate was sent.',409,kind='submission_uncertain',pending=saved.get('state')=='running')
         actual=hashlib.sha256(json.dumps(saved['result'],ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
         if actual!=saved.get('result_sha256'):
             raise ServiceError('The saved request result failed its integrity check.',409,kind='integrity_error')
         return self.parse_response(httpx.Response(200,json=saved['result']))
+
+    async def recover_pending(self, stage, prompt):
+        """Resume observation of a live bridge request; never resubmit its prompt."""
+        deadline=asyncio.get_running_loop().time()+self.timeout
+        while True:
+            try:return await self.recover(stage,prompt)
+            except ServiceError as exc:
+                if not exc.pending or asyncio.get_running_loop().time()>=deadline:raise
+            await asyncio.sleep(5)
     async def cancel(self,stage):
         ident=stage.get('request_id')
         if not ident:raise ServiceError('Eski istekte durdurma kimliği yok; işlem bitene kadar duraklatabilirsiniz.',409)
@@ -540,7 +549,11 @@ class Engine(StageControls):
                 path=self.input_path(run,stage);path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
                 temporary=path.with_suffix('.tmp');temporary.touch(mode=0o600)
                 temporary.write_text(prompt);temporary.replace(path)
-                stage.update(request_id=uuid.uuid4().hex,request_dispatched=False,status='running',started_at=now(),finished_at=None,error=None,attempts=stage['attempts']+1,input_sha256=digest(prompt))
+                # A resumed multipart stage can still own a live bridge call.
+                # Keep its cancellation target until the runner starts the next
+                # subrequest; a fresh placeholder ID would hide that ownership.
+                retained_id=stage.get('request_id') if stage.get('preparation') and stage.get('request_dispatched') else None
+                stage.update(request_id=retained_id or uuid.uuid4().hex,request_dispatched=bool(retained_id),status='running',started_at=now(),finished_at=None,error=None,attempts=stage['attempts']+1,input_sha256=digest(prompt))
                 launches.append((stage['id'],prompt))
             refresh_status(run);await self.store.save(run)
             for stage_id,prompt in launches:

@@ -103,7 +103,13 @@ async def execute(engine, run, stage, prompt):
                 if not hasattr(engine.provider,'recover'):
                     raise ServiceError('A previous subrequest may have completed remotely. It was not repeated.',409,kind='submission_uncertain')
                 child=dict(stage,request_id=job['request_id'])
-                try:response,usage=await engine.provider.recover(child,request)
+                async with engine.lock:
+                    latest=await engine.get(run['id']);current=engine.stage(latest,stage['id'])
+                    current['request_id']=child['request_id']
+                    await engine.store.save(latest)
+                try:
+                    recover=getattr(engine.provider,'recover_pending',engine.provider.recover)
+                    response,usage=await recover(child,request)
                 except ServiceError as exc:
                     if exc.settled:
                         job.update(status='rejected',error=str(exc),error_kind=exc.kind,request_settled=True)

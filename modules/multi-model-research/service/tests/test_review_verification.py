@@ -161,3 +161,25 @@ def test_unverified_assessment_is_not_an_invented_disagreement():
     assert ledger(plan, [known, unknown], 'review_chatgpt')['claims'][0]['status'] == 'unverified'
     unknown['findings'][0]['prior_assessments'][0]['status'] = 'rejected'
     assert ledger(plan, [known, unknown], 'review_chatgpt')['claims'][0]['status'] == 'disputed'
+
+
+@pytest.mark.asyncio
+async def test_repeated_downgrade_keeps_original_provider_assessment(tmp_path):
+    runner = make_runner(tmp_path)
+    runner.reader = SimpleNamespace(assess=lambda source: {'verification':'source_unavailable'},
+                                    validate_receipt=lambda *a: None)
+    node = sample(); row = node['findings'][0]
+    row.update(status='unverified', model_status='supported')
+    row['prior_assessments'][0].update(status='unverified', model_status='rejected')
+    await runner.check_sources(node, 'P1', {})
+    assert row['model_status'] == 'supported' and row['status'] == 'unverified'
+    assert row['prior_assessments'][0]['model_status'] == 'rejected'
+
+
+def test_catalog_anchor_cannot_claim_part_verification_in_ledger():
+    from review_execution import ledger
+    node=sample(); row=node['findings'][0]
+    row.update(id='P1:F1', status='unverified', model_status='supported', original_anchor={'scope':'claim_catalog'})
+    result=ledger({'protected_register':{'claims':[]}},[node],'review_chatgpt')
+    assert result['claims'][0]['status']=='unverified'
+    assert 'not this evidence part' in result['claims'][0]['reason']

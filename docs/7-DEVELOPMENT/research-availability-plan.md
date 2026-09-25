@@ -40,6 +40,11 @@ without another model call; input and output hashes are checked first. Confirmed
 failures retain their reason and settlement status, while unknown outcomes still
 block implicit repetition. See [ADR-018](decisions/ADR-018-durable-account-request-results.md).
 
+Original passage validation distinguishes literal identifier formatting from a
+quotation taken from the supplied shared claim catalog. Shared-context findings
+remain explicitly unverified and never establish current-part coverage; invented
+passages still block. See [ADR-019](decisions/ADR-019-explicit-research-passage-scope.md).
+
 ## Planned next increments — not implemented
 
 | Priority | Capability | Acceptance criteria |

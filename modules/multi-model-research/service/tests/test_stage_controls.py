@@ -150,3 +150,22 @@ async def test_skip_requires_completed_peer_and_never_changes_frozen_downstream_
 async def test_running_stage_must_be_stopped_before_skip(engine):
     run=await parallel(engine)
     with pytest.raises(ServiceError):await control(engine,run,'synthesis_chatgpt','skip')
+
+
+@pytest.mark.asyncio
+async def test_resuming_multipart_stage_keeps_live_cancellation_target(engine,monkeypatch):
+    from unittest.mock import AsyncMock
+    run=await engine.create({'question':'Research this subject','scope':'','language':'English',
+        'auto_synthesize':False,'execution_mode':'imports'},'retain-request-target')
+    for sid,_,rnd,_ in STAGES:
+        if rnd<=2:await add(engine,run['id'],sid)
+    await settle(engine)
+    run=await engine.get(run['id']);stage=engine.stage(run,'synthesis_chatgpt')
+    stage.update(status='ready',request_id='a'*32,request_dispatched=True,attempts=1)
+    run['auto_synthesize']=True
+    await engine.store.save(run)
+    monkeypatch.setattr(engine,'preparation_plan',lambda *a:{'version':'test-plan'})
+    monkeypatch.setattr(engine,'execute',AsyncMock())
+    await engine.kick(run['id'])
+    current=engine.stage(await engine.get(run['id']),'synthesis_chatgpt')
+    assert current['request_id']=='a'*32 and current['request_dispatched'] is True

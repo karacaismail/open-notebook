@@ -19,6 +19,9 @@ passage_not_matched, insufficient_passage and source_unavailable are unresolved 
 A finding or prior assessment downgraded to unverified must remain unverified in the report.
 model_status preserves the provider's original opinion; it is not the accepted verification status.
 Keep these limitations explicit. Do not infer that an unavailable or unmatched source proves a claim false.
+An original_anchor with scope claim_catalog comes from supplied shared context, not the current evidence part.
+It must remain unverified and cannot establish that part's evidence coverage. Retain its explicit scope and original model_status.
+An inline_identifier_markup anchor preserves the exact source text and byte offsets; no source words were changed.
 '''
 
 
@@ -90,7 +93,9 @@ def ledger(plan, nodes, stage_id):
         claims.append({'id': stage_id+':C'+str(index).zfill(4), 'working_finding_id':finding['id'], 'statement': finding['statement'],
             'status': finding['status'], 'sources': [s['url'] for s in finding['sources']],
             'counter_sources': [s['url'] for s in finding['sources']] if finding['status'] in ('disputed','rejected') else [],
-            'reason': ('Source verification incomplete; original model assessment retained separately.'
+            'reason': ('Original passage belongs to shared claim context, not this evidence part; assessment remains unverified.'
+                       if finding.get('original_anchor', {}).get('scope') == 'claim_catalog' else
+                       'Source verification incomplete; original model assessment retained separately.'
                        if finding.get('verification', {}).get('unverified_sources') else
                        'Source passage matched; interpretation remains a model assessment.'),
             'counter_evidence': finding['counter_evidence'], 'limits': finding['conditions']+' '+finding['limits']})
@@ -137,8 +142,10 @@ class ReviewRunner:
                 if not hasattr(self.engine.provider, 'recover'):
                     raise ServiceError('A previous re-research request has an uncertain outcome; it was not repeated.', 409, kind='submission_uncertain')
                 child.update(request_id=job['request_id'])
+                await self.progress('researching' if profile=='research_review' else 'reconciling', key, child['request_id'])
                 try:
-                    response, usage = await self.engine.provider.recover(child, request)
+                    recover = getattr(self.engine.provider, 'recover_pending', self.engine.provider.recover)
+                    response, usage = await recover(child, request)
                 except ServiceError as exc:
                     if exc.settled:
                         job.update(status='rejected', error=str(exc), error_kind=exc.kind, request_settled=True)
@@ -217,9 +224,9 @@ class ReviewRunner:
                     unresolved.append(key)
             finding['verification'] = {'unverified_sources': len(unresolved), 'unverified_receipts': unresolved}
             if unresolved:
-                finding['model_status'], finding['status'] = finding['status'], 'unverified'
+                finding.setdefault('model_status', finding['status']); finding['status'] = 'unverified'
                 for assessment in finding['prior_assessments']:
-                    assessment['model_status'], assessment['status'] = assessment['status'], 'unverified'
+                    assessment.setdefault('model_status', assessment['status']); assessment['status'] = 'unverified'
         await self.progress('checking_sources', part_id, checked_sources=checked,
             total_sources=len(items), unverified_sources=unverified)
 
@@ -248,7 +255,7 @@ class ReviewRunner:
                     raise PreparationError('Fresh search and source-reading tool activity was not confirmed.')
                 await self.progress('checking_sources', part['id'])
                 try:
-                    node = parse_map(response, part['id'], part['text'], known_claims)
+                    node = parse_map(response, part['id'], part['text'], known_claims, self.plan['claim_catalog'])
                 except SchemaRepairNeeded as error:
                     repair = ('Repair the structured response below using only the supplied material. Do not search, '
                         'invent facts, or add source URLs. Preserve every existing field value, finding, quote and limitation VERBATIM. '
@@ -263,7 +270,7 @@ class ReviewRunner:
                     if set(citations(fixed))-set(citations(response)):
                         raise PreparationError('Structured repair introduced a new source URL.')
                     validate_repair(response,fixed)
-                    node=parse_map(fixed,part['id'],part['text'],known_claims)
+                    node=parse_map(fixed,part['id'],part['text'],known_claims,self.plan['claim_catalog'])
                 await self.check_sources(node, part['id'], receipts)
                 nodes.append(node)
             ids = [p['id'] for p in self.plan['parts']]
@@ -283,6 +290,13 @@ class ReviewRunner:
                     + str(unknown) + ' could not be verified. Affected findings remain unverified. '
                     'Unmatched or unavailable sources are not proof that a claim is true or false. '
                     'Eşleşmeyen veya erişilemeyen kaynaklarla ilişkili bulgular doğrulanamadı; özgün değerlendirmeler ve alıntılar aşağıda korunuyor.\n')
+            shared_context = sum(f.get('original_anchor', {}).get('scope') == 'claim_catalog'
+                                 for node in nodes for f in node['findings'])
+            if shared_context:
+                report += ('\n\n## Original passage scope / Özgün alıntının kapsamı\n\n'
+                    + str(shared_context) + ' findings quote the supplied claim catalog rather than their current evidence part. '
+                    'They remain unverified and do not establish part coverage. Exact passages and their scope are retained below. '
+                    'Bu bulguların alıntıları ortak iddia listesinden geliyor; ilgili parçanın kanıtı sayılmadı ve doğrulanmamış olarak korundu.\n')
             # These appendices are deterministic: the model cannot silently omit an accepted finding.
             report += '\n\n## Preserved working evidence\n\n```json\n'+encoded({'findings_by_part':nodes,'source_receipts':receipts})+'\n```\n'
             report += '\n## Claim continuity register\n\n```evidence-ledger\n'+encoded(ledger(self.plan, nodes, self.stage['id']))+'\n```\n'
