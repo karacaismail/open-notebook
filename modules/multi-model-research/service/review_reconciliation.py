@@ -4,7 +4,7 @@ import copy
 import json
 
 from context_preparation import PreparationError, digest, envelope
-from review_contract import parse_merge
+from review_contract import parse_merge, read_object
 from workflow import citations
 
 VERSION = 'review-reconciliation-tree-v1'
@@ -162,6 +162,46 @@ def tree_payload(data, children):
         'finding_ids': ids, 'relationship_index': relationship_index(data, ids), 'child_reports': children}
 
 
+def parse_reconciliation(response, coverage, ids, data):
+    """Retain richer model annotations without treating them as source receipts."""
+    value = read_object(response)
+    records = value.get('reviewed_findings')
+    if not isinstance(records, list) or not records or not all(isinstance(r, dict) for r in records):
+        return parse_merge(response, coverage, ids)
+    # The exact same identity/coverage gate still applies. No missing identity
+    # is inferred from prose, reconstructed, or filled from the input.
+    projected = dict(value, reviewed_findings=[r.get('id') for r in records])
+    report = parse_merge(encoded(projected), coverage, ids)
+    unresolved = []
+    receipts = data['source_receipts']
+    for record in records:
+        checks = record.get('receipt_checks', {})
+        if not isinstance(checks, dict):
+            unresolved.append({'finding_id': record['id'], 'reason': 'Malformed model receipt annotations.'})
+            continue
+        for claimed, references in checks.items():
+            if not isinstance(references, list) or not all(isinstance(r, str) for r in references):
+                unresolved.append({'finding_id': record['id'], 'reason': 'Malformed model receipt references.'})
+                continue
+            for reference in references:
+                actual = receipts.get(reference, {}).get('verification')
+                if actual != claimed:
+                    unresolved.append({'finding_id': record['id'], 'receipt_id': reference,
+                                       'claimed': claimed, 'recorded': actual})
+    notes = {'kind': 'model-reconciliation-annotations-v1', 'response_sha256': digest(response),
+        'accepted_as_source_verification': False, 'records': records,
+        'input_statuses': {f['id']: f['status'] for n in data['working_findings']
+                           for f in n['findings'] if f['id'] in set(ids)},
+        'unresolved_receipt_references': unresolved,
+        'additional_fields': {k: v for k, v in value.items() if k not in ('coverage', 'reviewed_findings', 'report')}}
+    return (report + '\n\n## Preserved reconciliation annotations / Korunan bütünleştirme notları\n\n'
+        'These are model opinions, not accepted source receipts or changes to the original evidence. '
+        'They cannot promote an unverified finding. Input statuses remain authoritative for verification. '
+        'Unknown or conflicting receipt references remain unresolved; no reference was guessed or repaired. '
+        'Bu açıklamalar model yorumudur; kaynak doğrulaması sayılmaz. Eksik veya çelişen kaynak kimlikleri '
+        'tahmin edilmedi ve doğrulanmış sayılmadı.\n\n```json\n' + encoded(notes) + '\n```\n')
+
+
 async def reconcile(runner, data, instructions):
     """Use the existing durable call mechanism; never resubmit a saved or uncertain call."""
     child = dict(runner.stage, account_profile='review_merge')
@@ -185,7 +225,7 @@ async def reconcile(runner, data, instructions):
 
     async def invoke(key, request, coverage, ids):
         response, _ = await runner.call(key, request, 'review_merge')
-        report = parse_merge(response, coverage, ids)
+        report = parse_reconciliation(response, coverage, ids, data)
         if set(citations(report)) - allowed:
             raise PreparationError('Reconciliation invented an unprovided source URL.')
         node = {'id': key, 'coverage': coverage, 'finding_ids': ids,

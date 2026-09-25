@@ -51,6 +51,24 @@ This adds model calls and can increase latency. It does not relax context budget
 alter source safety checks, claim lossless model summarization, or silently fall
 back to a partial report when a batch or parent fails validation.
 
+## Rich reconciliation annotations
+
+Some providers return `reviewed_findings` as records with an explicit `id`,
+justification and receipt annotations instead of plain identity strings. The
+hierarchical runner may project those explicit identities through the unchanged
+exact coverage check. It never infers missing identities from prose or fills them
+from the input. Mixed forms, missing/duplicate/unknown identities and missing parts
+still fail. The default merge parser remains strict.
+
+The complete records and original response hash are appended as model annotations,
+not source receipts or changes to the input's verification statuses. Unknown receipt
+identities and conflicts with recorded verification are explicitly listed as
+unresolved; they are never guessed, repaired or accepted as matching sources. A
+program-owned bilingual notice states that these opinions cannot promote an
+unverified finding. Narrative text and every annotation field remain unchanged,
+and the original provider response stays immutable in the request journal. This
+compatibility path requires no replacement model call or frozen prompt change.
+
 ## Validation
 
 Regression tests reject omitted or duplicate findings, altered source receipts,
