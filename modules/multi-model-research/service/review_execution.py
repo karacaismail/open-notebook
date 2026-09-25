@@ -361,11 +361,24 @@ class ReviewRunner:
             ids = [p['id'] for p in self.plan['parts']]
             finding_ids = [f['id'] for node in nodes for f in node['findings']]
             unresolved_notice = unresolved_quote_notice(nodes)
-            request = MERGE_INSTRUCTIONS + VERIFICATION_INSTRUCTIONS + unresolved_notice + envelope(encoded({'brief': self.plan['brief'], 'coverage': ids,
+            merge_data = {'brief': self.plan['brief'], 'coverage': ids,
                 'source_sha256': self.plan['source_sha256'], 'prior_claim_register': self.plan['protected_register'],
-                'working_findings': nodes, 'source_receipts':receipts}))
-            response, _ = await self.call('reconcile', request, 'review_merge')
-            report = parse_merge(response, ids, finding_ids)
+                'working_findings': nodes, 'source_receipts':receipts}
+            instructions = MERGE_INSTRUCTIONS + VERIFICATION_INSTRUCTIONS + unresolved_notice
+            request = instructions + envelope(encoded(merge_data))
+            merge_budget = await asyncio.to_thread(self.engine.measure_input, request,
+                                                   dict(self.stage, account_profile='review_merge'))
+            # Keep previously submitted requests immutable. The new hierarchy is
+            # only admitted before reconciliation submission and pinned on resume.
+            if 'reconcile' in self.state['jobs'] or (merge_budget['fits'] and not self.state.get('reconciliation_tree')):
+                response, _ = await self.call('reconcile', request, 'review_merge')
+                report = parse_merge(response, ids, finding_ids)
+            else:
+                from review_reconciliation import reconcile, ReconciliationCapacityError
+                try:
+                    report = await reconcile(self, merge_data, instructions)
+                except ReconciliationCapacityError as exc:
+                    raise ServiceError(str(exc), 409, kind='context_limit') from exc
             # Always expose unresolved provenance even if the model omits it.
             report += unresolved_notice
             allowed = set(citations(body)) | {s['url'] for n in nodes for f in n['findings'] for s in f['sources']}
