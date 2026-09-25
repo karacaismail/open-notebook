@@ -16,6 +16,8 @@ import threading
 import time
 import uuid
 from cancellation import JOBS, RequestCancelled
+from receipts import ReceiptStore
+from cli_errors import terminal_error
 from model_policy import ModelPolicy, SelectionError, quota_reset_at
 from preliminary import PROFILES, WEB_SYSTEM, command as preliminary_command, trace as preliminary_trace, capabilities as preliminary_capabilities
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,6 +28,7 @@ TOKEN = (ROOT / '.bridge-key').read_text().strip()
 MODELS = CONFIG['models']
 MODEL_POLICY = ModelPolicy(CONFIG.get('executables',{}),ROOT/'model-cooldowns.json')
 JOBS.directory = ROOT / 'request-state'
+RECEIPTS = ReceiptStore(ROOT / 'request-results')
 RUN_DIR = ROOT / 'empty-workspace'
 RUN_DIR.mkdir(exist_ok=True)
 SYSTEM = (
@@ -38,14 +41,16 @@ SYSTEM = (
 
 
 class BridgeError(Exception):
-    def __init__(self, message, status=400, retry_at=None):
+    def __init__(self, message, status=400, retry_at=None, settled=False):
         super().__init__(message)
         self.status = status
         self.retry_at = retry_at
+        self.settled = settled
 
     def payload(self):
         error={'message':str(self),'type':'account_bridge_error','code':self.status}
         if self.retry_at:error['retry_at']=datetime.fromtimestamp(self.retry_at,timezone.utc).isoformat()
+        if self.settled:error['request_settled']=True
         return {'error':error}
 
 
@@ -274,11 +279,13 @@ def run_cli(model, prompt, profile='default', selection=None):
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGTERM)
         try:
-            proc.communicate(timeout=5)
+            stdout, stderr = proc.communicate(timeout=5)
         except subprocess.TimeoutExpired:
             os.killpg(proc.pid, signal.SIGKILL)
-            proc.communicate()
+            stdout, stderr = proc.communicate()
+        RECEIPTS.capture(provider, stdout, stderr, proc.returncode)
         raise BridgeError('Account CLI timed out. Retry with less context.', 504)
+    RECEIPTS.capture(provider, stdout, stderr, proc.returncode)
     JOBS.check()
     text = ''
     usage = {}
@@ -295,6 +302,7 @@ def run_cli(model, prompt, profile='default', selection=None):
                 if event.get('type') == 'item.completed' and event.get('item', {}).get('type') == 'agent_message':
                     messages.append(event['item']['text'])
                 if event.get('type') == 'turn.completed':
+                    incomplete = False
                     raw = event.get('usage', {})
                     usage = {'prompt_tokens': raw.get('input_tokens', 0), 'completion_tokens': raw.get('output_tokens', 0)}
                 if event.get('type') in ('turn.failed', 'error'):
@@ -338,13 +346,15 @@ def run_cli(model, prompt, profile='default', selection=None):
                     usage.update(first_context_tokens=contexts[0],max_context_tokens=max(contexts),context_observations=len(contexts))
     except (ValueError, TypeError, KeyError):
         text = ''
-    if not text and not tool_trace.get('tool_calls') and (proc.returncode or incomplete):
-        failure = (stdout + stderr).lower()
-        if any(x in failure for x in ('rate limit', 'usage limit', 'quota', '429')):
+    failure, failure_code = terminal_error(provider, stdout, stderr)
+    if proc.returncode or incomplete or not text:
+        if failure_code == 429 or any(x in failure for x in ('rate limit', 'usage limit', 'quota', '429')):
             MODEL_POLICY.limited(provider)
             raise BridgeError('The account quota is exhausted. Wait for the reset; no replacement research was sent.',429)
         if any(x in failure for x in ('model_not_found', 'unknown model', 'model is not available', 'invalid model')):
             raise BridgeError('The selected model is unavailable for this account.',404)
+        if failure_code == 401 or any(x in failure for x in ('not logged in', 'authentication failed', 'unauthenticated', 'please log in', 'invalid credentials')):
+            raise BridgeError('Account sign-in is required. Run the matching Hesap-Giris command.', 401)
     if incomplete:
         raise BridgeError('The account response was interrupted or reached its output limit; partial output was not accepted.', 502)
     if proc.returncode != 0 or not text:
@@ -355,14 +365,9 @@ def run_cli(model, prompt, profile='default', selection=None):
                           'result_keys': sorted(data) if provider == 'claude' and isinstance(locals().get('data'), dict) else [],
                           'subtype': data.get('subtype') if provider == 'claude' and isinstance(locals().get('data'), dict) else None}), flush=True)
         # Never return raw stderr: a CLI can include local paths, prompts, or auth URLs.
-        combined = (stdout + stderr).lower()
         if provider == 'claude' and isinstance(locals().get('data'), dict) and data.get('stop_reason') == 'refusal':
             raise BridgeError('Claude declined this request. Its account is signed in, but this prompt was rejected by the provider.', 403)
-        if any(x in combined for x in ('not logged in', 'authentication', 'login', 'sign in', 'credentials')):
-            raise BridgeError('Account sign-in is required. Run the matching Hesap-Giris command.', 401)
-        if any(x in combined for x in ('rate limit', 'usage limit', 'quota', '429')):
-            raise BridgeError('The account usage limit was reached. Wait for its reset or choose another account model.', 429)
-        raise BridgeError('The account CLI could not produce a response. Check its login and retry.', 502)
+        raise BridgeError('The account CLI ended without a confirmed complete response. Its local transcript was retained for recovery.', 502)
     if profile in PROFILES:
         usage['research_trace'] = tool_trace
         if profile in ('preliminary_research','research_review') and (not tool_trace.get('searched') or not tool_trace.get('read_sources') or tool_trace.get('unexpected_tools')):
@@ -388,6 +393,32 @@ def parse_json_answer(text):
 
 
 def completion(body):
+    prepare_prompt(body)
+    ident = body.get('local_request_id')
+    if ident is None: return execute_completion(body)
+    JOBS.validate(ident)
+    if not RECEIPTS.claim(body):
+        saved = RECEIPTS.read(ident)
+        if not saved or saved['request_sha256'] != RECEIPTS.fingerprint(body):
+            raise BridgeError('Request identity does not match its saved input.', 409)
+        if saved['state'] == 'completed': return saved['result']
+        if saved['state'] == 'failed':
+            raise BridgeError(saved['message'], saved['status'], saved.get('retry_at'), settled=True)
+        raise BridgeError('This request has no confirmed result yet; no duplicate was sent.', 409)
+    RECEIPTS.local.ident = ident
+    try:
+        result = execute_completion(body)
+        RECEIPTS.finish(ident, state='completed', result=result)
+        return result
+    except BridgeError as exc:
+        RECEIPTS.finish(ident, state='failed', message=str(exc), status=exc.status, retry_at=exc.retry_at)
+        exc.settled = True
+        raise
+    finally:
+        RECEIPTS.local.ident = None
+
+
+def execute_completion(body):
     prompt, function, response_format = prepare_prompt(body)
     model = body['model']
     selected=None
@@ -461,7 +492,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == '/health':
-            self.send_json(200, {'status': 'healthy', 'adapter': 'official-account-cli', 'request_cancellation': True,
+            self.send_json(200, {'status': 'healthy', 'adapter': 'official-account-cli', 'request_cancellation': True, 'request_receipts': True,
                                  'runtime_fingerprints': {model: runtime_fingerprint(model) for model in MODELS if MODELS[model]['provider'] in ('codex','claude')},
                                  'prompt_formats': ['json-v1','research-markdown-v1'],
                                  'preliminary': preliminary_capabilities(MODELS),
@@ -469,6 +500,13 @@ class Handler(BaseHTTPRequestHandler):
                                  'queues': {name: q.status() for name, q in QUEUES.items()}})
             return
         if not self.authorized():
+            return
+        if self.path.startswith('/v1/requests/') and self.path.endswith('/result'):
+            try:
+                saved = RECEIPTS.read(self.path.split('/')[3])
+                self.send_json(200 if saved else 404, saved or {'state': 'unknown'})
+            except (ValueError, KeyError):
+                self.send_json(409, {'state': 'integrity_error'})
             return
         if self.path.rstrip('/') == '/v1/models':
             self.send_json(200, {'object': 'list', 'data': [

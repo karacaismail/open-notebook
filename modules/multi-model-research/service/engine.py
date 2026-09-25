@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import hashlib
 from pathlib import Path
 import uuid
 import httpx
@@ -20,14 +21,45 @@ from research_rules import ResearchRules
 from stage_controls import StageControls
 
 class ServiceError(Exception):
-    def __init__(self,message,status=400,kind=None,policy=None):
-        super().__init__(message);self.status=status;self.kind=kind;self.policy=policy
+    def __init__(self,message,status=400,kind=None,policy=None,settled=False):
+        super().__init__(message);self.status=status;self.kind=kind;self.policy=policy;self.settled=settled
 
 class AccountProvider:
     def __init__(self,key_path,timeout=3900):
         self.key_path=key_path
         # Must exceed the bridge's own CLI timeout so the bridge reports the real reason.
         self.timeout=timeout
+    @staticmethod
+    def request_body(stage, prompt):
+        return {'model':{'ChatGPT':'chatgpt-account','Claude':'claude-account','Gemini':'gemini-account'}[stage['provider']],
+                'local_profile':stage.get('account_profile','research_synthesis'),'stream':False,
+                'local_request_id':stage.get('request_id'),
+                'local_prompt_format':stage.get('account_input_format','json-v1'),
+                'messages':[{'role':'system','content':system_for(stage)},{'role':'user','content':prompt}]}
+
+    async def recover(self, stage, prompt):
+        """Read a completed result without submitting another model request."""
+        async with httpx.AsyncClient(timeout=15) as client:
+            response=await client.get('http://127.0.0.1:8317/v1/requests/'+stage['request_id']+'/result',
+                headers={'Authorization':'Bearer '+self.key_path.read_text().strip()})
+        if response.status_code!=200:
+            raise ServiceError('No verified saved result is available; the request was not repeated.',409,kind='submission_uncertain')
+        saved=response.json();body=self.request_body(stage,prompt)
+        identity=hashlib.sha256(json.dumps({k:v for k,v in body.items() if k!='local_request_id'},
+            ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        if saved.get('request_sha256')!=identity:
+            raise ServiceError('The saved request receipt does not match the frozen input.',409,kind='integrity_error')
+        if saved.get('state')=='failed':
+            payload={'error':{'message':saved['message'],'request_settled':True}}
+            if saved.get('retry_at'):
+                payload['error']['retry_at']=datetime.fromtimestamp(saved['retry_at'],timezone.utc).isoformat()
+            return self.parse_response(httpx.Response(saved['status'],json=payload))
+        if saved.get('state')!='completed':
+            raise ServiceError('The request is still pending; no duplicate was sent.',409,kind='submission_uncertain')
+        actual=hashlib.sha256(json.dumps(saved['result'],ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        if actual!=saved.get('result_sha256'):
+            raise ServiceError('The saved request result failed its integrity check.',409,kind='integrity_error')
+        return self.parse_response(httpx.Response(200,json=saved['result']))
     async def cancel(self,stage):
         ident=stage.get('request_id')
         if not ident:raise ServiceError('Eski istekte durdurma kimliği yok; işlem bitene kadar duraklatabilirsiniz.',409)
@@ -53,9 +85,11 @@ class AccountProvider:
                     raise ServiceError(policy['findings'][0]['message'],503,kind='calibration_required',policy=policy)
             response=await client.post('http://127.0.0.1:8317/v1/chat/completions',
                 headers={'Authorization':'Bearer '+self.key_path.read_text().strip()},
-                json={'model':model,'local_profile':profile,'stream':False,'local_request_id':stage.get('request_id'),
-                      'local_prompt_format':stage.get('account_input_format','json-v1'),
-                      'messages':[{'role':'system','content':system_for(stage)},{'role':'user','content':prompt}]})
+                json=self.request_body(stage,prompt))
+        return self.parse_response(response)
+
+    @staticmethod
+    def parse_response(response):
         if response.status_code!=200:
             messages={401:'Hesap oturumu gerekli.',403:'Sağlayıcı bu sentez isteğini reddetti.',
                       429:'Hesap kotası doldu. Kota yenilendikten sonra devam edebilirsiniz.',
@@ -69,7 +103,8 @@ class AccountProvider:
                         messages[429]+=' Sağlayıcının bildirdiği yenilenme: '+stamp.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')+'. Otomatik tekrar yapılmayacak.'
                 except (TypeError,ValueError):pass
             kind={401:'login_required',403:'research_unavailable',422:'research_unavailable',429:'quota_wait'}.get(response.status_code)
-            raise ServiceError(messages.get(response.status_code,detail or 'Hesap bağlantısı hata verdi ('+str(response.status_code)+').'),502,kind=kind)
+            settled=response.json().get('error',{}).get('request_settled') is True if response.headers.get('content-type','').startswith('application/json') else False
+            raise ServiceError(messages.get(response.status_code,detail or 'Hesap bağlantısı hata verdi ('+str(response.status_code)+').'),502,kind=kind,settled=settled)
         data=response.json();choice=data['choices'][0];text=choice['message'].get('content','')
         if choice.get('finish_reason')=='length':raise ServiceError('Yanıt çıktı sınırında kesildi; tamamlanmış sayılmadı.',502)
         if not text.strip():raise ServiceError('Hesap boş yanıt döndürdü.',502)

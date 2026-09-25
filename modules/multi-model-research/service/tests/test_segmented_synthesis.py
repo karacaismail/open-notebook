@@ -33,7 +33,7 @@ def test_result_must_account_for_exact_expected_parts_and_have_a_report():
         with pytest.raises(PreparationError):parse_result(json.dumps({'coverage':coverage,'report':report}),['P1'])
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('answer',['Preserved findings and limitations.','See https://invented.invalid/source','connection_lost'])
+@pytest.mark.parametrize('answer',['Preserved findings and limitations.','See https://invented.invalid/source','connection_lost','recover_receipt'])
 async def test_execution_records_all_parts_and_reuses_completed_calls(tmp_path,answer):
     import asyncio
     import re
@@ -53,9 +53,9 @@ async def test_execution_records_all_parts_and_reuses_completed_calls(tmp_path,a
         async def synthesize(self,stage,text):
             self.calls+=1
             self.requests.append(text)
-            if answer=='connection_lost':raise OSError('Connection closed before receipt')
+            if answer in ('connection_lost','recover_receipt') and (answer=='connection_lost' or self.calls==1):raise OSError('Connection closed before receipt')
             ids=json.loads(re.search(r'exactly once: (\[.*?\])\.',text)[1])
-            return json.dumps({'coverage':ids,'report':answer}),{'prompt_tokens':100}
+            return json.dumps({'coverage':ids,'report':'Recovered findings.' if answer=='recover_receipt' else answer}),{'prompt_tokens':100}
     class Store:
         async def save(self,value):pass
     provider=Provider()
@@ -68,6 +68,20 @@ async def test_execution_records_all_parts_and_reuses_completed_calls(tmp_path,a
     engine=Engine();engine.provider=provider
     journal=tmp_path/'segmented-journal.json'
     journal.write_text(json.dumps({'version':'segmented-evidence-v1','input_sha256':digest(prompt),'plan':plan,'jobs':{}}))
+    if answer=='recover_receipt':
+        from engine import ServiceError
+        with pytest.raises(ServiceError):await segmented_execution.execute(engine,run,stage,prompt)
+        async def recover(child,text):
+            saved=json.loads(journal.read_text())['jobs']['map-P1']
+            assert child['request_id']==saved['request_id']
+            assert digest(text)==saved['input_sha256']
+            return json.dumps({'coverage':['P1'],'report':'Recovered findings.'}),{'prompt_tokens':100}
+        provider.recover=recover
+        result,_=await segmented_execution.execute(engine,run,stage,prompt)
+        assert result=='Recovered findings.'
+        assert provider.calls==len(plan['parts'])+1  # One interrupted call, recovered without resubmission.
+        assert json.loads(journal.read_text())['jobs']['map-P1']['status']=='completed'
+        return
     if answer=='connection_lost':
         from engine import ServiceError
         with pytest.raises(ServiceError) as error:await segmented_execution.execute(engine,run,stage,prompt)

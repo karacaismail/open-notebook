@@ -100,7 +100,18 @@ async def execute(engine, run, stage, prompt):
                 usages.append(job['usage'])
                 return validated_report(job['response'],ids)
             if job['status']=='in_flight':
-                raise ServiceError('A previous subrequest may have completed remotely. It was not repeated.',409,kind='submission_uncertain')
+                if not hasattr(engine.provider,'recover'):
+                    raise ServiceError('A previous subrequest may have completed remotely. It was not repeated.',409,kind='submission_uncertain')
+                child=dict(stage,request_id=job['request_id'])
+                try:response,usage=await engine.provider.recover(child,request)
+                except ServiceError as exc:
+                    if exc.settled:
+                        job.update(status='rejected',error=str(exc),error_kind=exc.kind,request_settled=True)
+                        await persist()
+                    raise
+                job.update(status='completed',response=response,response_sha256=digest(response),usage=usage)
+                await persist();usages.append(usage)
+                return validated_report(response,ids)
         if len(state['jobs'])>=64 and key not in state['jobs']:
             raise ServiceError('Multi-pass call limit reached; completed parts are saved.',409,kind='context_limit')
         child=copy.deepcopy(stage);child.update(request_id=uuid.uuid4().hex,input_budget=budget)
@@ -111,14 +122,16 @@ async def execute(engine, run, stage, prompt):
             current['request_id']=child['request_id']
             current['preparation']=dict(summary(plan),status='running',completed_calls=sum(j['status']=='completed' for j in state['jobs'].values()),current=key)
             await engine.store.save(latest)
+        if job:state.setdefault('attempt_history',[]).append(dict(job,key=key))
         state['jobs'][key]={'status':'in_flight','request_id':child['request_id'],
                             'input_sha256':digest(request),'input':request,'coverage':ids,'budget':budget}
         await persist()
         try:
             response,usage=await engine.provider.synthesize(child,request)
         except ServiceError as exc:
-            if exc.kind in ('quota_wait','login_required','research_unavailable','calibration_required'):
-                state['jobs'][key]['status']='rejected';await persist();raise
+            if exc.settled or exc.kind in ('quota_wait','login_required','research_unavailable','calibration_required'):
+                state['jobs'][key].update(status='rejected',error=str(exc),error_kind=exc.kind,request_settled=exc.settled)
+                await persist();raise
             raise ServiceError('Subrequest outcome is uncertain; it was not automatically repeated.',409,kind='submission_uncertain') from exc
         except Exception as exc:
             raise ServiceError('Connection ended without a confirmed outcome; the subrequest was not repeated.',409,kind='submission_uncertain') from exc

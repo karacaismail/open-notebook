@@ -134,17 +134,32 @@ class ReviewRunner:
                 if digest(job['response']) != job['response_sha256']: raise PreparationError('Saved re-research response changed.')
                 self.usages.append(job['usage']); return job['response'], job['usage']
             if job['status'] == 'in_flight':
-                raise ServiceError('A previous re-research request has an uncertain outcome; it was not repeated.', 409, kind='submission_uncertain')
+                if not hasattr(self.engine.provider, 'recover'):
+                    raise ServiceError('A previous re-research request has an uncertain outcome; it was not repeated.', 409, kind='submission_uncertain')
+                child.update(request_id=job['request_id'])
+                try:
+                    response, usage = await self.engine.provider.recover(child, request)
+                except ServiceError as exc:
+                    if exc.settled:
+                        job.update(status='rejected', error=str(exc), error_kind=exc.kind, request_settled=True)
+                        await self.persist()
+                    raise
+                job.update(status='completed', response=response, response_sha256=digest(response), usage=usage)
+                await self.persist(); self.usages.append(usage)
+                return response, usage
         child.update(request_id=uuid.uuid4().hex, input_budget=budget)
         await self.progress('researching' if profile=='research_review' else 'reconciling', key, child['request_id'])
+        if job:
+            self.state.setdefault('attempt_history', []).append(dict(job, key=key))
         self.state['jobs'][key] = {'status': 'in_flight', 'request_id': child['request_id'],
             'input_sha256': digest(request), 'input': request, 'profile': profile, 'budget': budget}
         await self.persist()
         try:
             response, usage = await self.engine.provider.synthesize(child, request)
         except ServiceError as exc:
-            if exc.kind in ('quota_wait', 'login_required', 'research_unavailable', 'calibration_required'):
-                self.state['jobs'][key]['status'] = 'rejected'; await self.persist(); raise
+            if exc.settled or exc.kind in ('quota_wait', 'login_required', 'research_unavailable', 'calibration_required'):
+                self.state['jobs'][key].update(status='rejected', error=str(exc), error_kind=exc.kind, request_settled=exc.settled)
+                await self.persist(); raise
             raise ServiceError('Re-research request outcome is uncertain; automatic repetition is blocked.', 409, kind='submission_uncertain') from exc
         except Exception as exc:
             raise ServiceError('Re-research connection ended before a confirmed result; automatic repetition is blocked.', 409, kind='submission_uncertain') from exc

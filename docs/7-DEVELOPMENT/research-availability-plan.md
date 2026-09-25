@@ -30,6 +30,16 @@ Regression tests reproduce nested and unclosed fences, multibyte text, corrupted
 
 Source-count stalls are handled by resumable verification batches, with negative source outcomes preserved as unverified evidence. See [ADR-017](decisions/ADR-017-resumable-source-assessment.md) for the preservation guarantees, blocking integrity checks and regression coverage.
 
+## Account request recovery (2026-09-25)
+
+Terminal provider errors are separated from report text. A recovered Codex stream
+error no longer overrides a subsequent successful completion. Private durable
+receipts preserve complete responses and failed-call diagnostics before the HTTP
+connection closes. Review and segmented synthesis can recover a saved result
+without another model call; input and output hashes are checked first. Confirmed
+failures retain their reason and settlement status, while unknown outcomes still
+block implicit repetition. See [ADR-018](decisions/ADR-018-durable-account-request-results.md).
+
 ## Planned next increments — not implemented
 
 | Priority | Capability | Acceptance criteria |
