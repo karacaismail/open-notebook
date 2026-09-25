@@ -124,6 +124,8 @@ def strings(value):
 
 
 def parse_map(text, part_id, original, claim_ids):
+    if len(text.encode('utf-8')) > 2 * 1024 * 1024:
+        raise PreparationError('The structured response size exceeds the safe parsing limit; nothing was truncated.')
     result = read_object(text)
     if not exact_ids(result.get('coverage'), [part_id]):
         if result.get('coverage')==part_id:
@@ -150,12 +152,12 @@ def parse_map(text, part_id, original, claim_ids):
         for assessment in assessments:
             if assessment.get('status') not in STATUSES or not isinstance(assessment.get('reason'),str) or not assessment['reason'].strip():
                 raise PreparationError('A prior claim assessment requires its own status and reason.')
-        if not isinstance(row.get('sources'), list) or not row['sources'] or len(row['sources']) > 8:
-            raise PreparationError('Every new finding needs a bounded set of source passages.')
+        if not isinstance(row.get('sources'), list) or not row['sources']:
+            raise PreparationError('Every new finding needs source passages.')
         for source in row['sources']:
             if (not isinstance(source, dict) or not isinstance(source.get('url'), str)
                     or not source['url'].startswith(('https://', 'http://'))
-                    or not isinstance(source.get('quote'), str) or len(source['quote'].strip()) < 12):
+                    or not isinstance(source.get('quote'), str) or not source['quote'].strip()):
                 raise PreparationError('A source needs a direct public URL and a verbatim passage.')
         row['id'] = part_id + ':F' + str(index)
     if not strings(result.get('blind_spots')) or not strings(result.get('dependencies')):

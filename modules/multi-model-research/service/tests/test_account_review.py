@@ -166,7 +166,7 @@ def test_redirects_are_revalidated_and_limited(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('fault', [None, 'repair', 'no_search', 'source_mismatch', 'lost_connection', 'missing_finding', 'oversized_merge'])
+@pytest.mark.parametrize('fault', [None, 'repair', 'unmatched', 'unavailable', 'no_search', 'source_mismatch', 'lost_connection', 'missing_finding', 'oversized_merge'])
 async def test_durable_research_checks_sources_reconciles_and_does_not_repeat(tmp_path, monkeypatch, fault):
     import asyncio
     import review_execution
@@ -205,8 +205,13 @@ async def test_durable_research_checks_sources_reconciles_and_does_not_repeat(tm
             else:
                 ids=[f['id'] for node in data['working_findings'] for f in node['findings']]
                 if fault=='missing_finding':ids.pop()
-                assert all(data['source_receipts'][source['receipt_id']]['verification']=='passage_matched_not_fact_checked'
+                expected_verification = {'unmatched': 'passage_not_matched', 'unavailable': 'source_unavailable'}.get(fault, 'passage_matched_not_fact_checked')
+                assert all(data['source_receipts'][source['receipt_id']]['verification']==expected_verification
                     for node in data['working_findings'] for f in node['findings'] for source in f['sources'])
+                if fault in ('unmatched', 'unavailable'):
+                    assert all(f['status'] == 'unverified' and f['model_status'] == 'supported'
+                        for node in data['working_findings'] for f in node['findings'])
+                    assert 'must remain unverified' in request
                 result={'coverage':data['coverage'],'reviewed_findings':ids,'report':'Not safe when wet; the dry-condition result does not generalize.'}
             return json.dumps(result),{'execution':{'searched':fault!='no_search','read_sources':True,'unexpected_tools':[]}}
     class Store:
@@ -217,12 +222,18 @@ async def test_durable_research_checks_sources_reconciles_and_does_not_repeat(tm
         def stage(self,r,sid):return stage
         def input_path(self,r,s):return tmp_path/'input-packet.md'
         def measure_input(self,request,child):return {'fits':not(fault=='oversized_merge' and child.get('account_profile')=='review_merge')}
+    import review_sources
+    original_verify = review_sources.SourceReader.verify
+    def request_source(*args):
+        if fault == 'unavailable': raise review_sources.SourceUnavailable('Source returned HTTP 403.')
+        return 200, {'content-type': 'text/plain'}, b'Not safe when wet.' if fault == 'unmatched' else b'Only when dry.'
+    monkeypatch.setattr(review_sources, '_request', request_source)
     def verify(self,source):
         if fault=='source_mismatch':raise PreparationError('passage mismatch')
-        return {'verification':'passage_matched_not_fact_checked','body_sha256':'hash'}
+        return original_verify(self, source)
     monkeypatch.setattr(review_execution.SourceReader,'verify',verify)
     engine=Engine()
-    if fault and fault!='repair':
+    if fault and fault not in ('repair', 'unmatched', 'unavailable'):
         with pytest.raises(ServiceError) as error:await review_execution.execute(engine,run,stage,prompt)
         expected='submission_uncertain' if fault=='lost_connection' else 'context_limit' if fault=='oversized_merge' else 'integrity_error'
         assert error.value.kind==expected
@@ -240,7 +251,10 @@ async def test_durable_research_checks_sources_reconciles_and_does_not_repeat(tm
     expected_calls=len(plan['parts'])*(2 if fault=='repair' else 1)+1
     assert len(engine.provider.calls)==expected_calls
     final_request=engine.provider.calls[-1][1]
-    assert final_request.count('"verification":"passage_matched_not_fact_checked"')==1
+    assert final_request.count('"verification":"passage_matched_not_fact_checked"')==(0 if fault in ('unmatched', 'unavailable') else 1)
+    if fault in ('unmatched', 'unavailable'):
+        assert usage['source_passages_matched'] == 0 and usage['source_passages_unverified'] == 1
+        assert 'Affected findings remain unverified' in report
     await review_execution.execute(engine,run,stage,prompt)
     assert len(engine.provider.calls)==expected_calls
     saved=json.loads(journal.read_text());saved['jobs']['review-P1']['response']+='corrupted'
@@ -258,7 +272,7 @@ async def test_cancel_waits_for_snapshot_writer_before_releasing_stage(tmp_path)
     started=threading.Event();finish=threading.Event()
     def verify(source):started.set();finish.wait(timeout=2);return {}
     runner=ReviewRunner(SimpleNamespace(input_path=lambda *a:tmp_path/'input-packet.md'),{}, {},'')
-    runner.reader=SimpleNamespace(verify=verify)
+    runner.reader=SimpleNamespace(assess=verify)
     task=asyncio.create_task(runner.verify_source({}))
     await asyncio.to_thread(started.wait,1)
     task.cancel();await asyncio.sleep(.01)

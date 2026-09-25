@@ -28,6 +28,8 @@ Malformed or nested code fences in a provider report must not absorb later repor
 
 Regression tests reproduce nested and unclosed fences, multibyte text, corrupted framing and an actually oversized code block. Real-packet validation reconstructed all 543,508 evidence bytes from 13 parts and produced an identical plan for both review providers. This establishes byte preservation and budget admission, not semantic completeness of generated findings. Existing completed reports and submitted subrequest journals remain immutable.
 
+Source-count stalls are handled by resumable verification batches, with negative source outcomes preserved as unverified evidence. See [ADR-017](decisions/ADR-017-resumable-source-assessment.md) for the preservation guarantees, blocking integrity checks and regression coverage.
+
 ## Planned next increments — not implemented
 
 | Priority | Capability | Acceptance criteria |

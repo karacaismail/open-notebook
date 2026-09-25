@@ -11,6 +11,16 @@ from review_contract import (MAP_INSTRUCTIONS, MERGE_INSTRUCTIONS, REVIEW_VERSIO
 from review_sources import SourceReader
 from workflow import citations, report_packet
 
+SOURCE_BATCH_SIZE = 24
+VERIFICATION_POLICY = 'source-assessment-v1'
+VERIFICATION_INSTRUCTIONS = '''\nSource assessment policy v1:
+Only passage_matched_not_fact_checked receipts establish a quotation's textual presence.
+passage_not_matched, insufficient_passage and source_unavailable are unresolved evidence, never proof of support or rejection.
+A finding or prior assessment downgraded to unverified must remain unverified in the report.
+model_status preserves the provider's original opinion; it is not the accepted verification status.
+Keep these limitations explicit. Do not infer that an unavailable or unmatched source proves a claim false.
+'''
+
 
 def encoded(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
@@ -67,18 +77,22 @@ def ledger(plan, nodes, stage_id):
     for prior in plan['protected_register'].get('claims', []):
         assessments = [(f,a) for f in findings for a in f['prior_assessments'] if a['id']==prior['id']]
         statuses = {a['status'] for _,a in assessments}
+        status = ('disputed' if 'disputed' in statuses or {'supported', 'rejected'} <= statuses else
+                  'unverified' if not statuses or 'unverified' in statuses else next(iter(statuses)))
         claims.append({'id': prior['id'], 'statement': prior['statement'],
-            'status': next(iter(statuses)) if len(statuses) == 1 else 'disputed' if statuses else 'unverified',
+            'status': status,
             'sources': sorted({s['url'] for f,_ in assessments for s in f['sources']}),
             'counter_sources': sorted({s['url'] for f,a in assessments if a['status'] in ('disputed','rejected') for s in f['sources']}),
-            'reason': ' | '.join(a['reason'] for _,a in assessments) or 'Not reassessed in the working findings; original claim retained.',
+            'reason': ' | '.join(('Source verification incomplete. ' if 'model_status' in a else '') + a['reason'] for _,a in assessments) or 'Not reassessed in the working findings; original claim retained.',
             'counter_evidence': ' | '.join(f['counter_evidence'] for f,_ in assessments),
             'limits': ' | '.join(f['conditions']+' '+f['limits'] for f,_ in assessments)})
     for index,finding in enumerate(findings,1):
         claims.append({'id': stage_id+':C'+str(index).zfill(4), 'working_finding_id':finding['id'], 'statement': finding['statement'],
             'status': finding['status'], 'sources': [s['url'] for s in finding['sources']],
             'counter_sources': [s['url'] for s in finding['sources']] if finding['status'] in ('disputed','rejected') else [],
-            'reason': 'Source passage matched; interpretation remains a model assessment.',
+            'reason': ('Source verification incomplete; original model assessment retained separately.'
+                       if finding.get('verification', {}).get('unverified_sources') else
+                       'Source passage matched; interpretation remains a model assessment.'),
             'counter_evidence': finding['counter_evidence'], 'limits': finding['conditions']+' '+finding['limits']})
     return {'claims': claims, 'blind_spots': [s for n in nodes for s in n['blind_spots']+n['dependencies']]}
 
@@ -96,14 +110,14 @@ class ReviewRunner:
             temporary.write_text(encoded(self.state)); temporary.replace(self.path)
         await asyncio.to_thread(write)
 
-    async def progress(self, status, current=None, request_id=None):
+    async def progress(self, status, current=None, request_id=None, **details):
         async with self.engine.lock:
             latest = await self.engine.get(self.run['id']); stage = self.engine.stage(latest, self.stage['id'])
             if latest.get('paused') or latest.get('control_state') or stage.get('control_state'):
                 from engine import ServiceError
                 raise ServiceError('Re-research paused; completed parts are saved.', 409, kind='interrupted')
             stage['preparation'] = dict(summary(self.plan), status=status, current=current,
-                completed_calls=sum(j['status']=='completed' for j in self.state['jobs'].values()))
+                completed_calls=sum(j['status']=='completed' for j in self.state['jobs'].values()), **details)
             if request_id: stage['request_id'] = request_id
             await self.engine.store.save(latest)
 
@@ -140,12 +154,59 @@ class ReviewRunner:
 
     async def verify_source(self, source):
         # Do not release the stage lock while a cancelled reader still writes its cache.
-        task=asyncio.create_task(asyncio.to_thread(self.reader.verify,source))
+        task=asyncio.create_task(asyncio.to_thread(self.reader.assess,source))
         try:return await asyncio.shield(task)
         except asyncio.CancelledError:
             try:await task
             except Exception:pass
             raise
+
+    async def check_sources(self, node, part_id, receipts):
+        """Checkpoint bounded batches, retaining all source pairs and negative checks."""
+        if self.state.setdefault('source_verification_policy', VERIFICATION_POLICY) != VERIFICATION_POLICY:
+            raise PreparationError('The saved source verification policy changed.')
+        checks = self.state.setdefault('source_checks', {})
+        pending = {}
+        for finding in node['findings']:
+            for source in finding['sources']:
+                pair = {k: source[k] for k in ('url', 'quote')}
+                pending[digest(encoded(pair))] = pair
+        items = list(pending.items())
+        checked = unverified = 0
+        for start in range(0, len(items), SOURCE_BATCH_SIZE):
+            for key, pair in items[start:start + SOURCE_BATCH_SIZE]:
+                await self.progress('checking_sources', part_id, checked_sources=checked,
+                    total_sources=len(items), unverified_sources=unverified,
+                    source_batch=start // SOURCE_BATCH_SIZE + 1)
+                if key in checks:
+                    saved = checks[key]
+                    if saved['source'] != pair or digest(encoded(saved['receipt'])) != saved['sha256']:
+                        raise PreparationError('Saved source receipt changed; verification stopped.')
+                    receipt = saved['receipt']
+                    await asyncio.to_thread(self.reader.validate_receipt, pair, receipt)
+                else:
+                    receipt = await self.verify_source(pair)
+                    if receipt.get('verification') not in ('passage_matched_not_fact_checked', 'passage_not_matched', 'insufficient_passage', 'source_unavailable'):
+                        raise PreparationError('Source verification returned an unknown receipt status.')
+                    checks[key] = {'source': pair, 'receipt': receipt, 'sha256': digest(encoded(receipt))}
+                    await self.persist()
+                receipts[key] = receipt
+                checked += 1
+                unverified += receipt['verification'] != 'passage_matched_not_fact_checked'
+        for finding in node['findings']:
+            unresolved = []
+            for source in finding['sources']:
+                key = digest(encoded({k: source[k] for k in ('url', 'quote')}))
+                source['receipt_id'] = key
+                if receipts[key]['verification'] != 'passage_matched_not_fact_checked':
+                    unresolved.append(key)
+            finding['verification'] = {'unverified_sources': len(unresolved), 'unverified_receipts': unresolved}
+            if unresolved:
+                finding['model_status'], finding['status'] = finding['status'], 'unverified'
+                for assessment in finding['prior_assessments']:
+                    assessment['model_status'], assessment['status'] = assessment['status'], 'unverified'
+        await self.progress('checking_sources', part_id, checked_sources=checked,
+            total_sources=len(items), unverified_sources=unverified)
 
     async def execute(self):
         from engine import ServiceError
@@ -164,12 +225,13 @@ class ReviewRunner:
             if not expected or summary(self.plan)['plan_sha256'] != expected:
                 raise PreparationError('The admitted re-research plan changed.')
             await self.persist()
-            nodes = []; known_claims = {c['id'] for c in self.plan['claim_catalog']}; source_urls = set(); receipts={}
+            nodes = []; known_claims = {c['id'] for c in self.plan['claim_catalog']}; receipts={}
             for part in self.plan['parts']:
                 response, usage = await self.call('review-'+part['id'], map_request(self.plan, part), 'research_review')
                 trace = usage.get('execution', {})
                 if not trace.get('searched') or not trace.get('read_sources') or trace.get('unexpected_tools'):
                     raise PreparationError('Fresh search and source-reading tool activity was not confirmed.')
+                await self.progress('checking_sources', part['id'])
                 try:
                     node = parse_map(response, part['id'], part['text'], known_claims)
                 except SchemaRepairNeeded as error:
@@ -187,27 +249,25 @@ class ReviewRunner:
                         raise PreparationError('Structured repair introduced a new source URL.')
                     validate_repair(response,fixed)
                     node=parse_map(fixed,part['id'],part['text'],known_claims)
-                part_urls = {s['url'] for f in node['findings'] for s in f['sources']}
-                source_urls.update(part_urls)
-                if len(part_urls)>24 or len(source_urls)>128:
-                    raise PreparationError('The source-verification work limit was reached. No sources or findings were discarded.')
-                await self.progress('checking_sources', part['id'])
-                for finding in node['findings']:
-                    for source in finding['sources']:
-                        receipt = await self.verify_source(source)
-                        receipt_id=digest(encoded({'url':source['url'],'quote':source['quote'],'body_sha256':receipt['body_sha256']}))
-                        receipts[receipt_id]=receipt
-                        source['receipt_id']=receipt_id
+                await self.check_sources(node, part['id'], receipts)
                 nodes.append(node)
             ids = [p['id'] for p in self.plan['parts']]
             finding_ids = [f['id'] for node in nodes for f in node['findings']]
-            request = MERGE_INSTRUCTIONS + envelope(encoded({'brief': self.plan['brief'], 'coverage': ids,
+            request = MERGE_INSTRUCTIONS + VERIFICATION_INSTRUCTIONS + envelope(encoded({'brief': self.plan['brief'], 'coverage': ids,
                 'source_sha256': self.plan['source_sha256'], 'prior_claim_register': self.plan['protected_register'],
                 'working_findings': nodes, 'source_receipts':receipts}))
             response, _ = await self.call('reconcile', request, 'review_merge')
             report = parse_merge(response, ids, finding_ids)
             allowed = set(citations(body)) | {s['url'] for n in nodes for f in n['findings'] for s in f['sources']}
             if set(citations(report))-allowed: raise PreparationError('Reconciliation invented an unprovided source URL.')
+            matched = sum(r['verification'] == 'passage_matched_not_fact_checked' for r in receipts.values())
+            unknown = len(receipts) - matched
+            if unknown:
+                report += ('\n\n## Source verification / Kaynak doğrulama\n\n'
+                    + str(matched) + '/' + str(len(receipts)) + ' source passages matched. '
+                    + str(unknown) + ' could not be verified. Affected findings remain unverified. '
+                    'Unmatched or unavailable sources are not proof that a claim is true or false. '
+                    'Eşleşmeyen veya erişilemeyen kaynaklarla ilişkili bulgular doğrulanamadı; özgün değerlendirmeler ve alıntılar aşağıda korunuyor.\n')
             # These appendices are deterministic: the model cannot silently omit an accepted finding.
             report += '\n\n## Preserved working evidence\n\n```json\n'+encoded({'findings_by_part':nodes,'source_receipts':receipts})+'\n```\n'
             report += '\n## Claim continuity register\n\n```evidence-ledger\n'+encoded(ledger(self.plan, nodes, self.stage['id']))+'\n```\n'
@@ -215,7 +275,8 @@ class ReviewRunner:
             await self.progress('completed')
             return report, {'account_review': True, 'calls': len(self.usages), 'measurements': self.usages,
                 'coverage': ids, 'source_sha256': self.plan['source_sha256'],
-                'source_passages_matched': sum(len(f['sources']) for n in nodes for f in n['findings'])}
+                'source_passages_matched': matched, 'source_passages_unverified': unknown,
+                'source_verification_policy': VERIFICATION_POLICY}
         except PreparationError as exc:
             raise ServiceError(str(exc), 409, kind='integrity_error') from exc
 

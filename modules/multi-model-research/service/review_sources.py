@@ -19,6 +19,18 @@ from context_preparation import PreparationError, digest
 MAX_BYTES = 2 * 1024 * 1024
 
 
+class SourceUnavailable(PreparationError):
+    """A public page cannot currently supply usable text; never a verified claim."""
+
+
+class PassageNotMatched(PreparationError):
+    """The page was retrieved, but its text does not contain the claimed quote."""
+
+
+class InsufficientPassage(PassageNotMatched):
+    """A short version/label is retained but cannot establish meaningful support."""
+
+
 def validate_target(url):
     try:
         parsed = urlsplit(url)
@@ -32,7 +44,9 @@ def validate_target(url):
         if not addresses or any(not ipaddress.ip_address(address).is_global or ipaddress.ip_address(address).is_multicast
                                 for address in addresses):
             raise ValueError('non-public address')
-    except (ValueError, UnicodeError, OSError) as exc:
+    except OSError as exc:
+        raise SourceUnavailable('Public source hostname could not be resolved.') from exc
+    except (ValueError, UnicodeError) as exc:
         raise PreparationError('Source URL is not a permitted public HTTP(S) target.') from exc
     return parsed, host, port, addresses[0]
 
@@ -56,19 +70,19 @@ def _request(url, deadline):
         response = connection.getresponse()
         headers = dict((k.lower(), v) for k, v in response.getheaders())
         if response.status in (301, 302, 303, 307, 308): return response.status, headers, b''
-        if response.status != 200: raise PreparationError('Source returned HTTP ' + str(response.status) + '.')
+        if response.status != 200: raise SourceUnavailable('Source returned HTTP ' + str(response.status) + '.')
         if headers.get('content-encoding', 'identity') != 'identity':
-            raise PreparationError('Compressed source response is not admitted by the bounded reader.')
+            raise SourceUnavailable('Compressed source response is not admitted by the bounded reader.')
         if int(headers.get('content-length', '0')) > MAX_BYTES:
-            raise PreparationError('Source exceeds the snapshot size limit.')
+            raise SourceUnavailable('Source exceeds the snapshot size limit.')
         content = bytearray()
         while len(content) <= MAX_BYTES:
-            if time.monotonic() >= deadline: raise PreparationError('Source snapshot deadline exceeded.')
+            if time.monotonic() >= deadline: raise SourceUnavailable('Source snapshot deadline exceeded.')
             if connection.sock: connection.sock.settimeout(max(.1, min(5, deadline-time.monotonic())))
             block = response.read1(min(65536, MAX_BYTES + 1 - len(content)))
             if not block: break
             content.extend(block)
-        if len(content) > MAX_BYTES: raise PreparationError('Source exceeds the snapshot size limit; it was not truncated.')
+        if len(content) > MAX_BYTES: raise SourceUnavailable('Source exceeds the snapshot size limit; it was not truncated.')
         return response.status, headers, bytes(content)
     finally:
         connection.close()
@@ -103,16 +117,16 @@ class SourceReader:
             for _ in range(5):
                 status, headers, raw = _request(current, deadline)
                 if status in (301, 302, 303, 307, 308):
-                    if not headers.get('location'): raise PreparationError('Source redirect has no destination.')
+                    if not headers.get('location'): raise SourceUnavailable('Source redirect has no destination.')
                     current = urljoin(current, headers['location']); continue
                 break
-            else: raise PreparationError('Source redirect limit exceeded.')
+            else: raise SourceUnavailable('Source redirect limit exceeded.')
             kind = headers.get('content-type', '').split(';')[0].strip().lower()
             if kind not in ('text/html', 'text/plain', 'text/markdown', 'application/json', 'application/xhtml+xml'):
-                raise PreparationError('Source format is not supported by the bounded passage verifier; use a public HTML/text source.')
+                raise SourceUnavailable('Source format is not supported by the bounded passage verifier; use a public HTML/text source.')
             from bs4 import BeautifulSoup, UnicodeDammit
             text = UnicodeDammit(raw).unicode_markup
-            if text is None: raise PreparationError('Source text could not be decoded.')
+            if text is None: raise SourceUnavailable('Source text could not be decoded.')
             if kind in ('text/html', 'application/xhtml+xml'):
                 document = BeautifulSoup(text, 'html.parser')
                 for tag in document(['script', 'style', 'noscript', 'template']): tag.decompose()
@@ -126,12 +140,14 @@ class SourceReader:
             return record
         except (OSError, ValueError, http.client.HTTPException) as exc:
             if isinstance(exc, PreparationError): raise
-            raise PreparationError('Public source could not be independently retrieved.') from exc
+            raise SourceUnavailable('Public source could not be independently retrieved.') from exc
 
     def verify(self, source):
         record = self.snapshot(source['url'])
+        if len(re.sub(r'\s+', ' ', source['quote']).strip()) < 12:
+            raise InsufficientPassage('The quotation is too short to establish meaningful source context.')
         if not passage_matches(record['text'], source['quote']):
-            raise PreparationError('A quoted passage was not found in the independently retrieved source. The report was saved but not accepted.')
+            raise PassageNotMatched('A quoted passage was not found in the independently retrieved source.')
         text=re.sub(r'\s+',' ',record['text']).strip()
         quote=re.sub(r'\s+',' ',source['quote']).strip();start=text.index(quote);end=start+len(quote)
         # Expose nearby negation/qualifications to the reconciler, not just a potentially cherry-picked quote.
@@ -139,3 +155,31 @@ class SourceReader:
         return {k: v for k, v in record.items() if k != 'text'} | {
             'verification': 'passage_matched_not_fact_checked', 'passage_context':text[left:right],
             'context_is_excerpt':left>0 or right<len(text), 'quote_start_in_context':start-left}
+
+    def assess(self, source):
+        """Retain negative outcomes explicitly; security/corruption errors still stop."""
+        try:
+            return self.verify(source)
+        except PassageNotMatched as exc:
+            record = self.snapshot(source['url'])
+            return {k: v for k, v in record.items() if k != 'text'} | {
+                'verification': 'insufficient_passage' if isinstance(exc, InsufficientPassage) else 'passage_not_matched', 'reason': str(exc)}
+        except SourceUnavailable as exc:
+            return {'url': source['url'], 'verification': 'source_unavailable', 'reason': str(exc),
+                    'checked_at': datetime.now(timezone.utc).isoformat()}
+
+    def validate_receipt(self, source, receipt):
+        """Reuse recorded checks without accepting a changed or missing snapshot."""
+        if receipt.get('verification') not in ('source_unavailable', 'passage_not_matched', 'insufficient_passage', 'passage_matched_not_fact_checked'):
+            raise PreparationError('Saved source receipt has an invalid verification status.')
+        if receipt.get('url') != source['url']:
+            raise PreparationError('Saved source receipt refers to a different URL.')
+        if receipt.get('verification') == 'source_unavailable':
+            return
+        key = digest(source['url'])
+        if not (self.root / (key + '.json')).is_file():
+            raise PreparationError('Saved source receipt is missing its snapshot.')
+        snapshot = self.snapshot(source['url'])
+        if (receipt.get('body_sha256') != snapshot['body_sha256']
+                or receipt.get('text_sha256') != snapshot['text_sha256']):
+            raise PreparationError('Saved source receipt differs from its snapshot.')
