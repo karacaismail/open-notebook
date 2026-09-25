@@ -333,6 +333,10 @@ def run_cli(model, prompt, profile='default', selection=None):
             if data.get('is_error') or data.get('error'):
                 raise ValueError('CLI returned an error')
             text = data.get('result')
+            if provider == 'claude' and profile == 'research_review':
+                from claude_artifact import recover_json_artifact
+                recovered = recover_json_artifact(stdout, text)
+                if recovered: text = recovered['text']
             incomplete = data.get('stop_reason') in ('max_tokens', 'max_output_tokens')
             raw = data.get('usage', {})
             if provider == 'claude':
@@ -503,7 +507,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith('/v1/requests/') and self.path.endswith('/result'):
             try:
-                saved = RECEIPTS.read(self.path.split('/')[3])
+                saved = RECEIPTS.public_result(self.path.split('/')[3])
                 self.send_json(200 if saved else 404, saved or {'state': 'unknown'})
             except (ValueError, KeyError):
                 self.send_json(409, {'state': 'integrity_error'})

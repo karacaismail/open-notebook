@@ -37,6 +37,26 @@ def encoded(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
+def retain_recovered_artifact(job, response, usage):
+    """Supplement, never replace, the original completed response and its hash."""
+    proof = usage.get('artifact_recovery', {})
+    if (digest(job['response']) != job['response_sha256'] or proof.get('tail_sha256') != job['response_sha256']
+            or proof.get('sha256') != digest(response) or proof.get('kind') != 'claude-output-continuation-v1'):
+        raise PreparationError('Recovered artifact is not bound to the saved original response.')
+    read_object(response)
+    job.update(artifact_response=response, artifact_sha256=digest(response), artifact_usage=usage,
+               artifact_proof_sha256=digest(encoded(proof)))
+
+
+def retained_artifact(job):
+    response = job['artifact_response']; usage = job['artifact_usage']; proof = usage.get('artifact_recovery', {})
+    if (digest(response)!=job['artifact_sha256'] or digest(encoded(proof))!=job['artifact_proof_sha256']
+            or digest(job['response'])!=job['response_sha256'] or proof.get('tail_sha256')!=job['response_sha256']
+            or proof.get('sha256')!=digest(response)):
+        raise PreparationError('The retained artifact or provenance changed.')
+    return response, usage
+
+
 def map_request(plan, part):
     index = plan['parts'].index(part)
     neighbors = {}
@@ -149,6 +169,20 @@ class ReviewRunner:
             if job['input_sha256'] != digest(request): raise PreparationError('Saved re-research subrequest changed.')
             if job['status'] == 'completed':
                 if digest(job['response']) != job['response_sha256']: raise PreparationError('Saved re-research response changed.')
+                if job.get('artifact_response') is not None:
+                    response, usage = retained_artifact(job)
+                    self.usages.append(usage); return response, usage
+                if profile == 'research_review' and hasattr(self.engine.provider, 'recover'):
+                    try: read_object(job['response'])
+                    except PreparationError:
+                        # A successful CLI continuation may have been recorded by
+                        # an older bridge as only its final fragment. GET only.
+                        child.update(request_id=job['request_id'])
+                        response, usage = await self.engine.provider.recover(child, request)
+                        if usage.get('artifact_recovery'):
+                            retain_recovered_artifact(job, response, usage)
+                            await self.persist(); self.usages.append(usage)
+                            return response, usage
                 self.usages.append(job['usage']); return job['response'], job['usage']
             if job['status'] == 'in_flight':
                 if not hasattr(self.engine.provider, 'recover'):

@@ -42,6 +42,30 @@ class ReceiptStore:
                 raise ValueError('Saved request result failed its integrity check')
         return value
 
+    def public_result(self, ident):
+        """Expose a verified derived artifact without rewriting the original receipt."""
+        value = self.read(ident)
+        if not value or value.get('state') != 'completed': return value
+        choices = value.get('result', {}).get('choices', [])
+        if len(choices) != 1 or choices[0].get('finish_reason') != 'stop': return value
+        tail = choices[0].get('message', {}).get('content')
+        if not isinstance(tail, str): return value
+        from claude_artifact import recover_json_artifact
+        recovered = []
+        for path in self.directory(ident).glob('cli-*.json'):
+            raw = path.read_bytes(); capture = json.loads(raw)
+            sealed = capture.pop('payload_sha256', None)
+            if sealed and sealed != hashlib.sha256(encoded(capture).encode()).hexdigest():
+                raise ValueError('Saved CLI capture failed its integrity check')
+            if capture.get('provider') != 'claude' or capture.get('exit_code') != 0: continue
+            artifact = recover_json_artifact(capture.get('stdout', ''), tail)
+            if artifact:
+                artifact.update(capture_sha256=hashlib.sha256(raw).hexdigest(),
+                    capture_previously_sealed=bool(sealed), source_result_sha256=value['result_sha256'])
+                recovered.append(artifact)
+        if len(recovered) > 1: raise ValueError('Ambiguous CLI capture recovery')
+        return dict(value, artifact_recovery=recovered[0]) if recovered else value
+
     def claim(self, body):
         ident = body['local_request_id']
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -64,5 +88,6 @@ class ReceiptStore:
         directory = self.directory(ident)
         # Preserve transcripts only in the private local receipt, never server logs or Git.
         number = len(list(directory.glob('cli-*.json')))
-        self.write(directory / ('cli-' + str(number) + '.json'), {
-            'provider': provider, 'stdout': stdout, 'stderr': stderr, 'exit_code': exit_code})
+        payload = {'provider': provider, 'stdout': stdout, 'stderr': stderr, 'exit_code': exit_code}
+        self.write(directory / ('cli-' + str(number) + '.json'), dict(payload,
+            payload_sha256=hashlib.sha256(encoded(payload).encode()).hexdigest()))

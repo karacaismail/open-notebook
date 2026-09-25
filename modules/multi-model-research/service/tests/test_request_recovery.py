@@ -76,3 +76,47 @@ async def test_unknown_receipt_is_not_polled_or_resubmitted(tmp_path):
     provider.recover=AsyncMock(side_effect=ServiceError('Unknown',409,kind='submission_uncertain'))
     with pytest.raises(ServiceError):await provider.recover_pending({'request_id':'a'*32},'Frozen input')
     assert provider.recover.await_count==1
+
+
+@pytest.mark.parametrize('fault',[None,'artifact','tail','original_result','source_result'])
+def test_derived_artifact_is_bound_to_original_receipt(fault):
+    from context_preparation import digest
+    text='{"coverage":["P4"],"findings":[]}'; tail='"findings":[]}'
+    result={'choices':[{'message':{'content':tail},'finish_reason':'stop'}]}
+    saved={'result':result,'result_sha256':sha(result),'artifact_recovery':{
+        'kind':'claude-output-continuation-v1','text':text,'sha256':digest(text),
+        'tail_sha256':digest(tail),'source_result_sha256':sha(result)}}
+    if fault=='artifact':saved['artifact_recovery']['text']+='changed'
+    if fault=='tail':saved['artifact_recovery']['tail_sha256']='wrong'
+    if fault=='original_result':saved['result']['choices'][0]['message']['content']='different'
+    if fault=='source_result':saved['artifact_recovery']['source_result_sha256']='wrong'
+    if fault:
+        with pytest.raises(ServiceError):AccountProvider.parse_artifact_recovery(saved)
+    else:
+        actual,usage=AccountProvider.parse_artifact_recovery(saved)
+        assert actual==text and 'text' not in usage['artifact_recovery']
+        assert saved['result']['choices'][0]['message']['content']==tail
+
+
+@pytest.mark.asyncio
+async def test_completed_fragment_is_recovered_once_without_replacing_it(tmp_path):
+    from review_execution import ReviewRunner
+    from context_preparation import digest
+    response='{"coverage":["P4"],"findings":[]}';tail='"findings":[]}'
+    usage={'artifact_recovery':{'kind':'claude-output-continuation-v1',
+        'sha256':digest(response),'tail_sha256':digest(tail)}}
+    provider=type('Provider',(),{'recover':AsyncMock(return_value=(response,usage)),
+        'synthesize':AsyncMock(side_effect=AssertionError('Never repeat the research'))})()
+    engine=type('Engine',(),{'provider':provider,'input_path':lambda *a:tmp_path/'input.md',
+        'measure_input':lambda *a:{'fits':True}})()
+    runner=ReviewRunner(engine,{}, {'provider':'Claude'},'')
+    job={'status':'completed','response':tail,'response_sha256':digest(tail),'usage':{},
+         'input_sha256':digest('Frozen evidence'),'request_id':'a'*32}
+    runner.state={'jobs':{'review-P4':job}}
+    assert (await runner.call('review-P4','Frozen evidence','research_review'))[0]==response
+    assert job['response']==tail and job['response_sha256']==digest(tail)
+    assert (await runner.call('review-P4','Frozen evidence','research_review'))[0]==response
+    assert provider.recover.await_count==1 and provider.synthesize.await_count==0
+    job['artifact_response']+='corrupt'
+    with pytest.raises(Exception,match='changed'):
+        await runner.call('review-P4','Frozen evidence','research_review')

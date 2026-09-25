@@ -52,6 +52,12 @@ Missing words, including negation, are exposed rather than normalized away.
 Invalid or ambiguous repairs stop without repeating the research. See
 [ADR-020](decisions/ADR-020-bounded-original-quotation-repair.md).
 
+Explicit Claude CLI output-limit continuations can be reconstructed from recorded
+assistant text without editing any byte or including reasoning/tool output.
+Existing partial receipts remain unchanged; a separately hashed artifact can be
+recovered through a read-only request. Source and record checks still apply. See
+[ADR-021](decisions/ADR-021-cli-output-continuation-artifacts.md).
+
 ## Planned next increments — not implemented
 
 | Priority | Capability | Acceptance criteria |

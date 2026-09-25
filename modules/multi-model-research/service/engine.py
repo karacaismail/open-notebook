@@ -59,7 +59,21 @@ class AccountProvider:
         actual=hashlib.sha256(json.dumps(saved['result'],ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
         if actual!=saved.get('result_sha256'):
             raise ServiceError('The saved request result failed its integrity check.',409,kind='integrity_error')
+        if stage.get('account_profile') == 'research_review' and saved.get('artifact_recovery'):
+            return self.parse_artifact_recovery(saved)
         return self.parse_response(httpx.Response(200,json=saved['result']))
+
+    @staticmethod
+    def parse_artifact_recovery(saved):
+        original, usage = AccountProvider.parse_response(httpx.Response(200,json=saved['result']))
+        artifact = saved['artifact_recovery']; text = artifact.get('text')
+        actual = hashlib.sha256(json.dumps(saved['result'],ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        if (not isinstance(text,str) or digest(text)!=artifact.get('sha256')
+                or digest(original)!=artifact.get('tail_sha256')
+                or actual!=saved.get('result_sha256') or artifact.get('source_result_sha256')!=actual
+                or artifact.get('kind')!='claude-output-continuation-v1'):
+            raise ServiceError('The recovered artifact failed its provenance checks.',409,kind='integrity_error')
+        return text, dict(usage, artifact_recovery={k:v for k,v in artifact.items() if k!='text'})
 
     async def recover_pending(self, stage, prompt):
         """Resume observation of a live bridge request; never resubmit its prompt."""
