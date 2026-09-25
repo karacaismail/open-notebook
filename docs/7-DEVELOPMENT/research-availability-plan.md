@@ -45,6 +45,13 @@ quotation taken from the supplied shared claim catalog. Shared-context findings
 remain explicitly unverified and never establish current-part coverage; invented
 passages still block. See [ADR-019](decisions/ADR-019-explicit-research-passage-scope.md).
 
+Incomplete model quotations now have one explicit provenance-repair opportunity
+per part. Exact source anchors supplement the immutable response; affected
+findings and prior assessments remain unverified and cannot establish coverage.
+Missing words, including negation, are exposed rather than normalized away.
+Invalid or ambiguous repairs stop without repeating the research. See
+[ADR-020](decisions/ADR-020-bounded-original-quotation-repair.md).
+
 ## Planned next increments — not implemented
 
 | Priority | Capability | Acceptance criteria |

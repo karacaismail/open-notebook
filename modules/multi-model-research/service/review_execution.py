@@ -7,7 +7,9 @@ from context_compaction import expand_prompt
 from context_preparation import PreparationError, digest, envelope, render_segment, validate_plan
 from packet_markdown import evidence_body
 from review_contract import (MAP_INSTRUCTIONS, MERGE_INSTRUCTIONS, REVIEW_VERSION, blocks,
-                             parse_map, parse_merge, partition, shared_brief, validate_repair, SchemaRepairNeeded)
+                             parse_map, parse_merge, partition, shared_brief, validate_repair, SchemaRepairNeeded,
+                             OriginalQuoteMismatch, read_object)
+from review_quote_repair import QUOTE_REPAIR_INSTRUCTIONS
 from review_sources import SourceReader
 from workflow import citations, report_packet
 
@@ -22,6 +24,12 @@ Keep these limitations explicit. Do not infer that an unavailable or unmatched s
 An original_anchor with scope claim_catalog comes from supplied shared context, not the current evidence part.
 It must remain unverified and cannot establish that part's evidence coverage. Retain its explicit scope and original model_status.
 An inline_identifier_markup anchor preserves the exact source text and byte offsets; no source words were changed.
+An original_anchor with scope repaired_part_quote records an incomplete or changed model quotation alongside its
+exact source passage. inserted_tokens exposes omissions, including any lost negation or condition. Do not rely on
+the incomplete original_quote. The finding and prior assessments MUST remain unverified; a repaired anchor neither
+proves semantic equivalence nor establishes part coverage. Keep this qualification explicit in the report.
+A source_scope of no_public_source means the provider supplied no public citation. This record is retained only
+as an unverified observation, never verified research evidence or part coverage. Do not invent a citation for it.
 '''
 
 
@@ -95,6 +103,10 @@ def ledger(plan, nodes, stage_id):
             'counter_sources': [s['url'] for s in finding['sources']] if finding['status'] in ('disputed','rejected') else [],
             'reason': ('Original passage belongs to shared claim context, not this evidence part; assessment remains unverified.'
                        if finding.get('original_anchor', {}).get('scope') == 'claim_catalog' else
+                       'Original model quote was incomplete; the exact repaired source passage is retained separately and the assessment remains unverified.'
+                       if finding.get('original_anchor', {}).get('scope') == 'repaired_part_quote' else
+                       'No public source was supplied; this observation is preserved but is not verified research evidence.'
+                       if finding.get('source_scope') == 'no_public_source' else
                        'Source verification incomplete; original model assessment retained separately.'
                        if finding.get('verification', {}).get('unverified_sources') else
                        'Source passage matched; interpretation remains a model assessment.'),
@@ -230,6 +242,22 @@ class ReviewRunner:
         await self.progress('checking_sources', part_id, checked_sources=checked,
             total_sources=len(items), unverified_sources=unverified)
 
+    async def parse_working_response(self, response, part, known_claims):
+        try:
+            return parse_map(response, part['id'], part['text'], known_claims, self.plan['claim_catalog'], preserve_unsourced=True)
+        except OriginalQuoteMismatch as error:
+            findings = read_object(response)['findings']
+            request = QUOTE_REPAIR_INSTRUCTIONS + envelope(encoded({
+                'response_sha256': digest(response), 'part_sha256': digest(part['text']),
+                'part_id': part['id'], 'original_part': part['text'],
+                'incomplete_quotes': [{'finding_index': i, 'original_quote': findings[i-1]['original_quote']}
+                                     for i in error.indexes]}))
+            # The durable job key permits one repair, reused after interruption.
+            # Its response adds provenance only; the research response is immutable.
+            proposal, _ = await self.call('quote-anchor-' + part['id'], request, 'review_merge')
+            return parse_map(response, part['id'], part['text'], known_claims,
+                             self.plan['claim_catalog'], quote_repair=proposal, preserve_unsourced=True)
+
     async def execute(self):
         from engine import ServiceError
         try:
@@ -255,7 +283,7 @@ class ReviewRunner:
                     raise PreparationError('Fresh search and source-reading tool activity was not confirmed.')
                 await self.progress('checking_sources', part['id'])
                 try:
-                    node = parse_map(response, part['id'], part['text'], known_claims, self.plan['claim_catalog'])
+                    node = await self.parse_working_response(response, part, known_claims)
                 except SchemaRepairNeeded as error:
                     repair = ('Repair the structured response below using only the supplied material. Do not search, '
                         'invent facts, or add source URLs. Preserve every existing field value, finding, quote and limitation VERBATIM. '
@@ -270,7 +298,7 @@ class ReviewRunner:
                     if set(citations(fixed))-set(citations(response)):
                         raise PreparationError('Structured repair introduced a new source URL.')
                     validate_repair(response,fixed)
-                    node=parse_map(fixed,part['id'],part['text'],known_claims,self.plan['claim_catalog'])
+                    node=await self.parse_working_response(fixed, part, known_claims)
                 await self.check_sources(node, part['id'], receipts)
                 nodes.append(node)
             ids = [p['id'] for p in self.plan['parts']]
@@ -297,6 +325,20 @@ class ReviewRunner:
                     + str(shared_context) + ' findings quote the supplied claim catalog rather than their current evidence part. '
                     'They remain unverified and do not establish part coverage. Exact passages and their scope are retained below. '
                     'Bu bulguların alıntıları ortak iddia listesinden geliyor; ilgili parçanın kanıtı sayılmadı ve doğrulanmamış olarak korundu.\n')
+            repaired_quotes = sum(f.get('original_anchor', {}).get('scope') == 'repaired_part_quote'
+                                  for node in nodes for f in node['findings'])
+            if repaired_quotes:
+                report += ('\n\n## Incomplete original quotations / Eksik özgün alıntılar\n\n'
+                    + str(repaired_quotes) + ' findings contained incomplete model quotations. Exact source passages '
+                    'were recovered as separate anchors; original model text and omissions are retained below. '
+                    'These findings and linked assessments remain unverified and do not establish part coverage. '
+                    'Eksik alıntılar doğru kabul edilmedi; özgün metin ve eksikler korundu, ilgili bulgular doğrulanmamış bırakıldı.\n')
+            unsourced = sum(f.get('source_scope') == 'no_public_source' for n in nodes for f in n['findings'])
+            if unsourced:
+                report += ('\n\n## Unsourced observations / Kaynaksız gözlemler\n\n'
+                    + str(unsourced) + ' records supplied no public source. They remain unverified observations, '
+                    'not accepted research evidence or part coverage. No citations were invented. '
+                    'Dış kaynak sunulmayan bu kayıtlar doğrulanmamış gözlem olarak korundu; kanıt sayılmadı.\n')
             # These appendices are deterministic: the model cannot silently omit an accepted finding.
             report += '\n\n## Preserved working evidence\n\n```json\n'+encoded({'findings_by_part':nodes,'source_receipts':receipts})+'\n```\n'
             report += '\n## Claim continuity register\n\n```evidence-ledger\n'+encoded(ledger(self.plan, nodes, self.stage['id']))+'\n```\n'

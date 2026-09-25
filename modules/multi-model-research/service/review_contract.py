@@ -16,6 +16,12 @@ class SchemaRepairNeeded(PreparationError):
     """Only additive/type-equivalent repairs are eligible for another account call."""
 
 
+class OriginalQuoteMismatch(PreparationError):
+    def __init__(self, indexes=()):
+        super().__init__('An original quotation does not match its evidence part; explicit provenance repair is required.')
+        self.indexes = list(indexes)
+
+
 def packet_boundaries(text):
     """Locate text-frame ends by their serialized UTF-8 lengths, not source Markdown.
 
@@ -154,10 +160,16 @@ def original_anchor(quote, original, linked_ids, claim_catalog):
         if claim['id'] in linked_ids and len(quote) >= 12 and quote in claim['statement']:
             return {'scope': 'claim_catalog', 'claim_id': claim['id'], 'text': quote,
                     'counted_as_part_evidence': False}
-    raise PreparationError('A finding changed its original passage or used an invalid status.')
+    raise OriginalQuoteMismatch()
 
 
-def parse_map(text, part_id, original, claim_ids, claim_catalog=None):
+def downgrade(row):
+    row.setdefault('model_status', row['status']); row['status'] = 'unverified'
+    for assessment in row['prior_assessments']:
+        assessment.setdefault('model_status', assessment['status']); assessment['status'] = 'unverified'
+
+
+def parse_map(text, part_id, original, claim_ids, claim_catalog=None, quote_repair=None, preserve_unsourced=False):
     if len(text.encode('utf-8')) > 2 * 1024 * 1024:
         raise PreparationError('The structured response size exceeds the safe parsing limit; nothing was truncated.')
     result = read_object(text)
@@ -168,7 +180,7 @@ def parse_map(text, part_id, original, claim_ids, claim_catalog=None):
     findings = result.get('findings')
     if not isinstance(findings, list) or not findings or len(findings) > 100:
         raise PreparationError('Re-research requires 1–100 complete findings per part; no silent clipping is allowed.')
-    part_anchors = 0
+    part_anchors = 0; mismatches = []
     for index, row in enumerate(findings, 1):
         if isinstance(row,dict):
             for key in ('conditions','counter_evidence','limits'):
@@ -182,9 +194,13 @@ def parse_map(text, part_id, original, claim_ids, claim_catalog=None):
             raise PreparationError('A finding invented a prior claim identity.')
         # Provenance and verification metadata belong to this validator, not the model.
         row.pop('original_anchor', None); row.pop('model_status', None); row.pop('verification', None)
-        anchor = original_anchor(row['original_quote'], original, row['prior_claim_ids'], claim_catalog)
+        row.pop('source_scope', None)
+        try:
+            anchor = original_anchor(row['original_quote'], original, row['prior_claim_ids'], claim_catalog)
+        except OriginalQuoteMismatch:
+            mismatches.append(index); anchor = None
         if anchor: row['original_anchor'] = anchor
-        if not anchor or anchor['scope'] == 'part': part_anchors += 1
+        if index not in mismatches and (not anchor or anchor['scope'] == 'part'): part_anchors += 1
         assessments=row.get('prior_assessments')
         if (not isinstance(assessments,list) or any(not isinstance(a,dict) for a in assessments)
                 or not exact_ids([a.get('id') for a in assessments],row['prior_claim_ids'])):
@@ -196,21 +212,35 @@ def parse_map(text, part_id, original, claim_ids, claim_catalog=None):
         if anchor and anchor['scope'] == 'claim_catalog':
             # Shared context is genuine supplied data, but is not this part's
             # evidence. Preserve it without claiming verification of part coverage.
-            row['model_status'], row['status'] = row['status'], 'unverified'
-            for assessment in assessments:
-                assessment['model_status'], assessment['status'] = assessment['status'], 'unverified'
-        if not isinstance(row.get('sources'), list) or not row['sources']:
+            downgrade(row)
+        if not isinstance(row.get('sources'), list) or (not row['sources'] and not preserve_unsourced):
             raise PreparationError('Every new finding needs source passages.')
+        if not row['sources']:
+            # Retain an unsourced observation without inventing a public citation
+            # or accepting it as research evidence. Do not infer it is true or local.
+            row['source_scope'] = 'no_public_source'
+            downgrade(row)
+            if index not in mismatches and (not anchor or anchor['scope'] == 'part'): part_anchors -= 1
         for source in row['sources']:
             if (not isinstance(source, dict) or not isinstance(source.get('url'), str)
                     or not source['url'].startswith(('https://', 'http://'))
                     or not isinstance(source.get('quote'), str) or not source['quote'].strip()):
                 raise PreparationError('A source needs a direct public URL and a verbatim passage.')
         row['id'] = part_id + ':F' + str(index)
-    if not part_anchors:
-        raise PreparationError('No finding anchors to the actual evidence part; shared context cannot establish part coverage.')
     if not strings(result.get('blind_spots')) or not strings(result.get('dependencies')):
         raise PreparationError('Missing explicit blind-spot or cross-part dependency records.')
+    if mismatches:
+        if quote_repair is None: raise OriginalQuoteMismatch(mismatches)
+        from review_quote_repair import validate_quote_repair
+        anchors = validate_quote_repair(quote_repair, text, original, mismatches)
+        for index, anchor in anchors.items():
+            row = findings[index - 1]
+            row['original_anchor'] = anchor
+            downgrade(row)
+    elif quote_repair is not None:
+        raise PreparationError('Unexpected quotation repair for an already matching response.')
+    if not part_anchors:
+        raise PreparationError('No finding anchors to the actual evidence part; shared or repaired quotes cannot establish part coverage.')
     return result
 
 
