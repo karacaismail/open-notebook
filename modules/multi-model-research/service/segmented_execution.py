@@ -118,8 +118,7 @@ async def execute(engine, run, stage, prompt):
     def request_text(data,ids,final=False,claim_ids=()):
         return prefix+result_instructions(ids,final=final)+registry.instructions(claim_ids)+data
 
-    async def call(key, data, ids, final=False,claim_ids=()):
-        request=request_text(data,ids,final,claim_ids)
+    async def raw_call(key, request, ids, regeneration=False):
         budget=await asyncio.to_thread(engine.measure_input,request,stage)
         if not budget['fits']:
             raise ServiceError('Prepared subrequest exceeds the input budget.',409,kind='context_limit')
@@ -131,7 +130,7 @@ async def execute(engine, run, stage, prompt):
                 if digest(job['response'])!=job['response_sha256']:
                     raise ServiceError('Saved response changed.',409,kind='integrity_error')
                 usages.append(job['usage'])
-                return validated_report(job['response'],ids,claim_ids)
+                return job['response']
             if job['status']=='in_flight':
                 if not hasattr(engine.provider,'recover'):
                     raise ServiceError('A previous subrequest may have completed remotely. It was not repeated.',409,kind='submission_uncertain')
@@ -150,7 +149,10 @@ async def execute(engine, run, stage, prompt):
                     raise
                 job.update(status='completed',response=response,response_sha256=digest(response),usage=usage)
                 await persist();usages.append(usage)
-                return validated_report(response,ids,claim_ids)
+                return response
+            if regeneration:
+                raise ServiceError('The single artifact regeneration already settled without a valid result; it was not repeated.',
+                                   409,kind='integrity_error')
         if len(state['jobs'])>=64 and key not in state['jobs']:
             raise ServiceError('Multi-pass call limit reached; completed parts are saved.',409,kind='context_limit')
         child=copy.deepcopy(stage);child.update(request_id=uuid.uuid4().hex,input_budget=budget)
@@ -177,7 +179,54 @@ async def execute(engine, run, stage, prompt):
         # Save even malformed output before validation: it is evidence for recovery.
         state['jobs'][key].update(status='completed',response=response,response_sha256=digest(response),usage=usage)
         await persist();usages.append(usage)
-        return validated_report(response,ids,claim_ids)
+        return response
+
+    async def call(key, data, ids, final=False,claim_ids=()):
+        from review_execution import retain_recovered_artifact, retained_artifact
+        request=request_text(data,ids,final,claim_ids)
+        response=await raw_call(key,request,ids)
+        job=state['jobs'][key]
+        if job.get('artifact_response') is not None:
+            response,usage=retained_artifact(job)
+            usages[-1]=usage
+            return validated_report(response,ids,claim_ids)
+        try:
+            return validated_report(response,ids,claim_ids)
+        except PreparationError as exc:
+            if stage.get('provider')!='Claude' or not isinstance(exc.__cause__,json.JSONDecodeError):
+                raise
+        retry_key=key+'-artifact-retry-1'
+        records=state.setdefault('artifact_regenerations',{})
+        record={'kind':'invalid-json-regeneration-v1','original_job':key,
+                'original_response_sha256':digest(response),'replacement_job':retry_key,
+                'same_input_sha256':digest(request)}
+        if key in records:
+            if any(records[key].get(k)!=v for k,v in record.items()):
+                raise PreparationError('The saved artifact regeneration provenance changed.')
+            record=records[key]
+        else:
+            # GET the confirmed receipt before considering a new generation.
+            # A missing/uncertain/changed receipt cannot authorize a blind retry.
+            if hasattr(engine.provider,'recover'):
+                child=dict(stage,request_id=job['request_id'])
+                recovered,usage=await engine.provider.recover(child,request)
+                if usage.get('artifact_recovery'):
+                    validated_report(recovered,ids,claim_ids)
+                    retain_recovered_artifact(job,recovered,usage)
+                    await persist();usages[-1]=usage
+                    return validated_report(recovered,ids,claim_ids)
+                if digest(recovered)!=job['response_sha256']:
+                    raise PreparationError('The completed artifact receipt changed without recovery provenance.')
+            records[key]=record
+            await persist()
+        replacement=await raw_call(retry_key,request,ids,regeneration=True)
+        replacement_sha=digest(replacement)
+        if record.get('replacement_response_sha256',replacement_sha)!=replacement_sha:
+            raise PreparationError('The saved artifact regeneration response changed.')
+        record['replacement_response_sha256']=replacement_sha
+        await persist()
+        # No recursive recovery or regeneration: an invalid replacement stops.
+        return validated_report(replacement,ids,claim_ids)
 
     try:
         nodes=[]
@@ -206,6 +255,9 @@ async def execute(engine, run, stage, prompt):
                     await engine.store.save(latest)
                 usage={'segmented':True,'calls':len(usages),'measurements':usages,
                        'coverage':ids,'source_sha256':plan['source_sha256']}
+                if state.get('artifact_regenerations'):
+                    usage['artifact_regenerations']=list(state['artifact_regenerations'].values())
+                    result+='\n\n## Provider artifact note / Sağlayıcı çıktı notu\n\nOne or more intermediate artifacts were regenerated once from their exact frozen inputs after invalid provider JSON. This is not reconstruction of lost output or a claim of semantic equivalence. Original and replacement responses remain saved and the same coverage and source checks apply. Geçersiz ara çıktılar aynı özgün girdiden bir kez yeniden üretildi; eski ve yeni yanıtlar korundu.\n'
                 if plan.get('register_mode'):
                     usage.update(register_claim_ids=claim_ids,register_sha256=registry.catalog(plan['protected_register'])['full_register_sha256'])
                     result+='\n\n## Claim-register scope / İddia kaydının kapsamı\n\n'+registry.parent_register(plan)['notice']+'\n\nTam iddia kayıtları ayrı gruplarda incelendi. Özgün kayıtlar ve ara yanıtlar saklanır; son anlatım tüm ham kayıtları tek seferde görmedi. Kapsam kontrolü anlamsal eksiksizlik veya doğruluk garantisi değildir.\n'

@@ -159,7 +159,8 @@ def command_for(model, profile='default', selection=None):
                 '--no-session-persistence', '--permission-mode', 'dontAsk',
                 '--system-prompt', SYSTEM]
         if research:
-            args += ['--effort', effort]
+            args[args.index('--output-format') + 1] = 'stream-json'
+            args += ['--verbose', '--effort', effort]
         if cli_model:
             args += ['--model', cli_model]
         return args
@@ -290,7 +291,8 @@ def run_cli(model, prompt, profile='default', selection=None):
     text = ''
     usage = {}
     incomplete = False
-    tool_trace, preliminary_result = preliminary_trace(stdout, provider) if profile in PROFILES else ({}, None)
+    tool_trace, preliminary_result = preliminary_trace(stdout, provider) if (
+        profile in PROFILES or (provider == 'claude' and profile == 'research_synthesis')) else ({}, None)
     try:
         if provider == 'codex':
             messages = []
@@ -333,7 +335,7 @@ def run_cli(model, prompt, profile='default', selection=None):
             if data.get('is_error') or data.get('error'):
                 raise ValueError('CLI returned an error')
             text = data.get('result')
-            if provider == 'claude' and profile in ('research_review', 'review_merge'):
+            if provider == 'claude' and profile in ('research_review', 'review_merge', 'research_synthesis'):
                 from claude_artifact import recover_json_artifact
                 recovered = recover_json_artifact(stdout, text)
                 if recovered: text = recovered['text']

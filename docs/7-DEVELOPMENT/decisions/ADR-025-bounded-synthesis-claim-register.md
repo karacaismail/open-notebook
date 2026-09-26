@@ -55,3 +55,30 @@ records, reordered batches, altered shared context, changed hashes, invented or
 missing response identities, measured limits, legacy plan compatibility, receipt
 reuse and failure before resubmission. Live-data preflight is read-only and marked
 as a projection until all upstream reports actually finish.
+
+## Completed output continuation recovery
+
+Claude synthesis now records the CLI event stream, including every assistant
+artifact segment. The model, effort, tool prohibition and session-persistence
+settings remain unchanged. Joining is permitted only across the already tested,
+explicit synthetic output-limit continuation boundary, with one session,
+successful termination and an exact terminal-tail match. Reasoning and tool
+messages never enter the report. Original receipts and captures remain immutable.
+The changed CLI flags change the runtime fingerprint; deployment must validate
+and record the new runtime rather than bypassing its calibration gate.
+
+For an older completed response containing invalid JSON syntax, the synthesis
+runner first reads its durable receipt. A provenance-verified complete artifact
+is retained separately and checked against the same coverage and source rules.
+If no complete artifact was recorded, Claude may regenerate that intermediate
+once using the exact frozen request and a new, explicitly journaled request ID.
+The replacement consumes the existing 64-call allowance. Its failure, including
+a confirmed provider rejection, cannot trigger another regeneration on resume.
+An uncertain replacement is observed through its receipt, never submitted twice.
+
+The journal and final report distinguish regeneration from reconstruction. Both
+raw responses, their hashes and their common input hash are retained. Schema,
+coverage, invented-source, duplicate-key, non-finite-number, receipt-integrity,
+pause and budget failures cannot use this exception. JSON parsing now rejects
+ambiguous duplicate keys and non-finite numbers. A syntactically valid artifact
+does not establish semantic completeness or equivalence to the missing output.

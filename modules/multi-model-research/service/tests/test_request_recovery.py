@@ -99,6 +99,27 @@ def test_derived_artifact_is_bound_to_original_receipt(fault):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('profile',[None,'research_synthesis','research_review','review_merge'])
+async def test_claude_recovery_profiles_use_verified_artifact(tmp_path,monkeypatch,profile):
+    from context_preparation import digest
+    key=tmp_path/'key';key.write_text('test')
+    provider=AccountProvider(key)
+    stage={'provider':'Claude','request_id':'b'*32}
+    if profile is not None:stage['account_profile']=profile
+    body=provider.request_body(stage,'Frozen')
+    tail='"report":"Preserved"}';text='{"coverage":["P1"],'+tail
+    result={'choices':[{'message':{'content':tail},'finish_reason':'stop'}]}
+    saved={'state':'completed','request_sha256':sha({k:v for k,v in body.items() if k!='local_request_id'}),
+           'result':result,'result_sha256':sha(result),'artifact_recovery':{
+               'kind':'claude-output-continuation-v1','text':text,'sha256':digest(text),
+               'tail_sha256':digest(tail),'source_result_sha256':sha(result)}}
+    monkeypatch.setattr(httpx.AsyncClient,'get',AsyncMock(return_value=httpx.Response(200,json=saved)))
+    monkeypatch.setattr(httpx.AsyncClient,'post',AsyncMock(side_effect=AssertionError('No resubmission')))
+    actual,usage=await provider.recover(stage,'Frozen')
+    assert actual==text and usage['artifact_recovery']['tail_sha256']==digest(tail)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('profile',['research_review','review_merge'])
 async def test_completed_fragment_is_recovered_once_without_replacing_it(tmp_path,profile):
     from review_execution import ReviewRunner

@@ -97,7 +97,14 @@ def result_instructions(ids, final=False):
 def parse_result(text, ids):
     value=text.strip()
     if value.startswith('```json\n') and value.endswith('\n```'): value=value[8:-4]
-    try: data=json.loads(value)
+    def unique(pairs):
+        result={}
+        for key,item in pairs:
+            if key in result: raise ValueError('Duplicate JSON key')
+            result[key]=item
+        return result
+    def invalid_constant(value): raise ValueError('Non-finite JSON number')
+    try: data=json.loads(value,object_pairs_hook=unique,parse_constant=invalid_constant)
     except (ValueError, TypeError) as exc: raise PreparationError('Invalid structured intermediate result.') from exc
     if (not isinstance(data,dict) or not isinstance(data.get('coverage'),list)
             or any(not isinstance(i,str) for i in data['coverage'])

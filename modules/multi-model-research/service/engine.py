@@ -59,7 +59,9 @@ class AccountProvider:
         actual=hashlib.sha256(json.dumps(saved['result'],ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
         if actual!=saved.get('result_sha256'):
             raise ServiceError('The saved request result failed its integrity check.',409,kind='integrity_error')
-        if stage.get('account_profile') == 'research_review' and saved.get('artifact_recovery'):
+        if (stage['provider']=='Claude'
+                and stage.get('account_profile','research_synthesis') in ('research_review','review_merge','research_synthesis')
+                and saved.get('artifact_recovery')):
             return self.parse_artifact_recovery(saved)
         return self.parse_response(httpx.Response(200,json=saved['result']))
 

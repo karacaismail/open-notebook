@@ -63,3 +63,24 @@ def test_receipt_exposes_derived_artifact_without_mutating_saved_result(tmp_path
     capture=json.loads((tmp_path/ident/'cli-0.json').read_text());capture['stdout']+='tampered'
     (tmp_path/ident/'cli-0.json').write_text(json.dumps(capture))
     with pytest.raises(ValueError,match='capture'):store.public_result(ident)
+
+
+def test_synthesis_profile_captures_continuations_without_enabling_tools():
+    import server
+    command = server.command_for('claude-account', 'research_synthesis')
+    assert command[command.index('--output-format') + 1] == 'stream-json'
+    assert '--verbose' in command
+    assert command[command.index('--tools') + 1] == ''
+    assert '--restricted' in command and '--no-session-persistence' in command
+
+
+def test_synthesis_returns_complete_recorded_artifact_not_just_the_last_fragment(monkeypatch):
+    from unittest.mock import Mock
+    import server
+    text, tail, events = stream()
+    proc = Mock(returncode=0)
+    proc.communicate.return_value = ('\n'.join(map(json.dumps, events)), '')
+    monkeypatch.setattr(server.JOBS, 'spawn', lambda *a, **kw: proc)
+    actual, usage = server.run_cli('claude-account', 'frozen input', 'research_synthesis')
+    assert actual == text and actual != tail
+    assert 'private reasoning' not in actual
