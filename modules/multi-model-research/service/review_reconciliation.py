@@ -7,6 +7,7 @@ from context_preparation import PreparationError, digest, envelope
 from review_contract import parse_merge, read_object
 from reconciliation_links import restore_receipted_fields
 from reconciliation_tables import transport, INSTRUCTIONS as TABLE_INSTRUCTIONS, VERSION as TABLE_VERSION
+from reconciliation_text import transport as text_transport, INSTRUCTIONS as TEXT_INSTRUCTIONS, VERSION as TEXT_VERSION
 from workflow import citations
 
 VERSION = 'review-reconciliation-tree-v1'
@@ -278,22 +279,35 @@ async def reconcile(runner, data, instructions):
         make = lambda selected: tree_payload(data, selected)
         request_for = lambda value: TREE_INSTRUCTIONS + envelope(encoded(value))
         saved_encoding = runner.state.get('reconciliation_encodings', {}).get(str(level))
+        variants = {
+            None: ('reconcile-tree-', '', lambda value:value),
+            TABLE_VERSION: ('reconcile-tree-table-', TABLE_INSTRUCTIONS, transport),
+            TEXT_VERSION: ('reconcile-tree-text-', TEXT_INSTRUCTIONS, text_transport),
+        }
+        if saved_encoding is not None:
+            version = saved_encoding.get('version')
+            if version not in (TABLE_VERSION, TEXT_VERSION):
+                raise PreparationError('Unknown saved reconciliation encoding.')
+            candidates = [version]
+        else:
+            candidates = list(variants)
         parents = None
-        if saved_encoding is None:
+        for version in candidates:
+            prefix, transport_instructions, encode = variants[version]
+            request_for = lambda value: transport_instructions + TREE_INSTRUCTIONS + envelope(encoded(encode(value)))
             try:
                 parents = await asyncio.to_thread(partition_items, children, make,
                                                  lambda value: admitted(request_for(value)))
             except ReconciliationCapacityError:
-                pass  # Try exact reversible transport before reporting capacity.
-        use_tables = parents is None or (len(children) > 1 and len(parents) >= len(children))
-        if use_tables:
-            request_for = lambda value: TABLE_INSTRUCTIONS + TREE_INSTRUCTIONS + envelope(encoded(transport(value)))
-            parents = await asyncio.to_thread(partition_items, children, make,
-                                             lambda value: admitted(request_for(value)))
-        if len(children) > 1 and len(parents) >= len(children):
+                parents = None
+                continue
+            if len(children) == 1 or len(parents) < len(children):
+                break
+            parents = None
+        if parents is None:
             raise ReconciliationCapacityError('Reconciliation reports cannot converge within the measured budget; all evidence remains saved.')
-        if use_tables:
-            encoding = {'version': TABLE_VERSION, 'protocol_sha256': digest(TABLE_INSTRUCTIONS + TREE_INSTRUCTIONS),
+        if version is not None:
+            encoding = {'version': version, 'protocol_sha256': digest(transport_instructions + TREE_INSTRUCTIONS),
                 'requests': [{'input_sha256': digest(request_for(parent)),
                               'decoded_sha256': digest(encoded(parent))} for parent in parents]}
             if saved_encoding is not None and saved_encoding != encoding:
@@ -302,7 +316,6 @@ async def reconcile(runner, data, instructions):
             await runner.persist()
         next_children = []
         for index, parent in enumerate(parents, 1):
-            prefix = 'reconcile-tree-table-' if use_tables else 'reconcile-tree-'
             next_children.append(await invoke(prefix + str(level) + '-' + str(index),
                 request_for(parent), parent['coverage'], parent['finding_ids']))
         children = next_children

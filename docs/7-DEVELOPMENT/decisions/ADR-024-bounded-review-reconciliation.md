@@ -156,3 +156,40 @@ aliases still fail. Original records are unchanged; the retained annotation
 appendix records which field supplied each identity. Annotation statuses and
 `reviewed_by` text remain model opinions and cannot become source verification.
 Existing responses using `id` retain their previous rendering byte-for-byte.
+
+## Reversible text and string dictionary fallback
+
+A later parent can still exceed capacity after ordinary column tables: child
+reports contain canonical JSON annotation blocks inside strings, and registers
+repeat long literal status, source and qualification values. Before stopping,
+`lossless-json-text-tables-v1` may expose canonical, single-line JSON code blocks
+as ordered text/JSON fragments, apply column tables, and reference repeated
+literal strings through a shared dictionary. Every narrative character, JSON
+field, repeated occurrence, condition, source URL and status reconstructs to the
+identical canonical original payload. Noncanonical, ambiguous or invalid JSON
+blocks remain literal text; duplicate keys are never repaired. Source objects
+and strings that collide with transport markers are explicitly escaped.
+
+Reconstruct and compare the entire canonical payload byte for byte before
+measuring any candidate. Validate dictionary references, fragment shapes,
+versions and the decoded payload hash. Prompts explain each layer, literal
+escaping and the distinction between repeated text and independent evidence.
+This is a serialization optimization, not evidence removal, model summarization
+or a semantic correctness guarantee.
+
+Existing submitted requests and old encoding plans retain their exact bytes.
+Only an unsubmitted parent may choose the additional fallback after legacy and
+ordinary table representations cannot converge. Pin the new version, protocol,
+request and decoded hashes, using distinct `reconcile-tree-text-L-N` job keys.
+Keep the same provider budget, ten percent admission headroom, batch limit and
+four-level ceiling. If the new representation still cannot converge, stop.
+Missing coverage, invented sources and unverified evidence keep existing gates.
+
+Validation includes exact reconstruction of complete narratives and annotations,
+Unicode, negations, numeric/null/boolean values, reserved markers and arbitrary
+literal code blocks; tampered dictionaries/hashes, invalid references and
+malformed fragments fail. Resume reuses identical jobs and rejects changed plans.
+A read-only replay of the blocked Claude parent reused all 47 completed calls;
+its two child reports, 304 finding identities and 74 complete prior claims fit
+at 98,144/120,000 admission tokens, compared with 125,538 before the new transport.
+No model call was made by that validation.

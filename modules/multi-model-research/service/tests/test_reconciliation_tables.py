@@ -95,7 +95,7 @@ async def test_fallback_does_not_loosen_capacity_if_tables_also_cannot_converge(
     from review_reconciliation import reconcile
     runner=TableRunner(); original=runner.engine.measure_input
     def measure(request,child):
-        if '"lossless-json-tables-v1"' in request: return {'fits':False}
+        if any(version in request for version in ['"lossless-json-tables-v1"', '"lossless-json-text-tables-v1"']): return {'fits':False}
         if '"child_reports"' in request:
             value=json.loads(request.split('BEGIN_REFERENCE_',1)[1].split('\n',1)[1].split('\nEND_REFERENCE_',1)[0])
             return {'fits':len(value['child_reports'])<=1}
