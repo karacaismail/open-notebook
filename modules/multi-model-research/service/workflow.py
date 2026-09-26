@@ -85,6 +85,18 @@ def ready(run, stage):
 
 
 def citations(text):
+    from citation_text import fragments
+    urls = []
+    seen = set()
+    for fragment in fragments(text):
+        for url in literal_citations(fragment):
+            if url not in seen:
+                urls.append(url)
+                seen.add(url)
+    return urls
+
+
+def literal_citations(text):
     urls=[]
     for match in re.finditer(r'https?://[^\s<>\[\]"`\x00-\x20]+',text):
         url=match.group()

@@ -181,5 +181,6 @@ class SourceReader:
             raise PreparationError('Saved source receipt is missing its snapshot.')
         snapshot = self.snapshot(source['url'])
         if (receipt.get('body_sha256') != snapshot['body_sha256']
-                or receipt.get('text_sha256') != snapshot['text_sha256']):
+                or receipt.get('text_sha256') != snapshot['text_sha256']
+                or receipt.get('final_url') != snapshot['final_url']):
             raise PreparationError('Saved source receipt differs from its snapshot.')

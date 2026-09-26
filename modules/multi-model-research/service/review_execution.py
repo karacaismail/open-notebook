@@ -39,6 +39,28 @@ def encoded(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
+def source_urls(nodes, receipts):
+    """Original and exact redirect URLs from independently checked receipts.
+
+    check_sources has validated each receipt against its immutable saved check
+    and source snapshot. URL provenance does not upgrade quotation/claim status.
+    Never infer a redirect from a model's narrative or an unrelated receipt.
+    """
+    urls = set()
+    for node in nodes:
+        for finding in node['findings']:
+            for source in finding['sources']:
+                urls.add(source['url'])
+                receipt = receipts.get(source['receipt_id'], {})
+                if receipt.get('url') != source['url']:
+                    raise PreparationError('Source receipt URL differs from its finding.')
+                if receipt.get('verification') in ('passage_matched_not_fact_checked', 'passage_not_matched', 'insufficient_passage'):
+                    final = receipt.get('final_url')
+                    if isinstance(final, str) and final:
+                        urls.add(final)
+    return urls
+
+
 def unresolved_quote_notice(nodes):
     count = sum(f.get('original_anchor', {}).get('scope') == 'unresolved_part_quote'
                 for node in nodes for f in node['findings'])
@@ -381,7 +403,7 @@ class ReviewRunner:
                     raise ServiceError(str(exc), 409, kind='context_limit') from exc
             # Always expose unresolved provenance even if the model omits it.
             report += unresolved_notice
-            allowed = set(citations(body)) | {s['url'] for n in nodes for f in n['findings'] for s in f['sources']}
+            allowed = set(citations(body)) | source_urls(nodes, receipts)
             if set(citations(report))-allowed: raise PreparationError('Reconciliation invented an unprovided source URL.')
             matched = sum(r['verification'] == 'passage_matched_not_fact_checked' for r in receipts.values())
             unknown = len(receipts) - matched

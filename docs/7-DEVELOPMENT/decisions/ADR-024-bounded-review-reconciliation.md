@@ -193,3 +193,28 @@ A read-only replay of the blocked Claude parent reused all 47 completed calls;
 its two child reports, 304 finding identities and 74 complete prior claims fit
 at 98,144/120,000 admission tokens, compared with 125,538 before the new transport.
 No model call was made by that validation.
+
+### Citation inspection across retained JSON and source redirects
+
+Completed narratives can contain preserved reports as JSON strings. Scanning the
+serialized bytes joined URL text with escaped line breaks and list markers,
+creating nonexistent addresses such as `https://example.org/source\n-`.
+Citation extraction now decodes complete JSON and valid, explicitly labelled
+JSON/evidence-ledger fences before scanning their string keys and values.
+Nested reports, duplicate object keys and trailing text remain visible. Invalid
+containers retain literal scanning; escapes outside JSON and percent-encoded
+URL bytes are not rewritten. The stored reports and provider responses never
+change. This is transport decoding, not permission to invent or normalize URLs.
+
+The final source gate also recognizes exact redirect destinations recorded by
+the independent source reader. Only a receipt linked to an actual finding can
+supply one; unavailable or unrelated receipts cannot. Reuse validates the
+receipt's final URL against its retained snapshot in addition to body/text
+hashes. A source redirect never promotes an unmatched quotation or unverified
+claim. Other invented addresses and receipt tampering still stop execution.
+
+Regression tests cover escaped newlines, slashes, Unicode, nested reports,
+duplicate keys, Markdown boundaries, malformed containers, invented URLs,
+matched/unmatched redirects and changed receipts. A read-only replay recovered
+the complete Claude review from all 48 existing completed requests, with no new
+provider call or source fetch and no changes to frozen requests or raw outputs.

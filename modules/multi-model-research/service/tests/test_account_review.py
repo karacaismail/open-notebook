@@ -166,7 +166,7 @@ def test_redirects_are_revalidated_and_limited(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('fault', [None, 'repair', 'wrapped', 'wrapped_repair', 'unmatched', 'unavailable', 'no_search', 'source_mismatch', 'lost_connection', 'missing_finding', 'oversized_merge'])
+@pytest.mark.parametrize('fault', [None, 'repair', 'wrapped', 'wrapped_repair', 'unmatched', 'unavailable', 'no_search', 'source_mismatch', 'lost_connection', 'missing_finding', 'oversized_merge', 'redirect', 'invented_url'])
 async def test_durable_research_checks_sources_reconciles_and_does_not_repeat(tmp_path, monkeypatch, fault):
     import asyncio
     import review_execution
@@ -214,6 +214,8 @@ async def test_durable_research_checks_sources_reconciles_and_does_not_repeat(tm
                         for node in data['working_findings'] for f in node['findings'])
                     assert 'must remain unverified' in request
                 result={'coverage':data['coverage'],'reviewed_findings':ids,'report':'Not safe when wet; the dry-condition result does not generalize.'}
+                if fault == 'redirect':result['report'] += ' https://example.org/current\n- Source redirect.'
+                if fault == 'invented_url':result['report'] += ' https://invented.example/claim\n- Unknown source.'
             response=json.dumps(result)
             if child['account_profile']=='research_review' and fault in ('wrapped','wrapped_repair'):
                 response='Provider note: the wet-weather trial is missing.\n```json\n'+response+'\n```'
@@ -230,6 +232,8 @@ async def test_durable_research_checks_sources_reconciles_and_does_not_repeat(tm
     original_verify = review_sources.SourceReader.verify
     def request_source(*args):
         if fault == 'unavailable': raise review_sources.SourceUnavailable('Source returned HTTP 403.')
+        if fault == 'redirect' and args[0] != 'https://example.org/current':
+            return 302, {'location': 'https://example.org/current'}, b''
         return 200, {'content-type': 'text/plain'}, b'Not safe when wet.' if fault == 'unmatched' else b'Only when dry.'
     monkeypatch.setattr(review_sources, '_request', request_source)
     def verify(self,source):
@@ -237,7 +241,7 @@ async def test_durable_research_checks_sources_reconciles_and_does_not_repeat(tm
         return original_verify(self, source)
     monkeypatch.setattr(review_execution.SourceReader,'verify',verify)
     engine=Engine()
-    if fault and fault not in ('repair', 'wrapped', 'wrapped_repair', 'unmatched', 'unavailable'):
+    if fault and fault not in ('repair', 'wrapped', 'wrapped_repair', 'unmatched', 'unavailable', 'redirect'):
         with pytest.raises(ServiceError) as error:await review_execution.execute(engine,run,stage,prompt)
         expected='submission_uncertain' if fault=='lost_connection' else 'context_limit' if fault=='oversized_merge' else 'integrity_error'
         assert error.value.kind==expected
@@ -348,7 +352,8 @@ async def test_real_engine_round_barrier_dispatch_audit_and_report_preservation(
             else:result={'coverage':data['coverage'],'reviewed_findings':[f['id'] for n in data['working_findings'] for f in n['findings']],
                 'report':'Conditional evidence only. The result does not generalize to wet conditions.'}
             return json.dumps(result),{'execution':{'searched':True,'read_sources':True,'unexpected_tools':[]}}
-    monkeypatch.setattr(SourceReader,'verify',lambda *a:{'verification':'passage_matched_not_fact_checked','body_sha256':'fixture'})
+    monkeypatch.setattr(SourceReader,'verify',lambda self,source:{'url':source['url'],
+        'final_url':source['url'],'verification':'passage_matched_not_fact_checked','body_sha256':'fixture'})
     store=Store(tmp_path);await store.open()
     counter=lambda s:len(s)//4
     engine=Engine(store,Provider(),Sink(),counter,120000,budget=TokenBudget(counter))
