@@ -25,6 +25,40 @@ def docker(*args):
     return subprocess.run(DOCKER + list(args), check=True, capture_output=True, text=True)
 
 
+def verify_archive(path):
+    """Hash each member once, without repeated backward seeks through gzip."""
+    observed = {}; names = set(); saved = None
+    with tarfile.open(path, mode='r|gz') as archive:
+        for member in archive:
+            rel = Path(member.name)
+            if rel.is_absolute() or '..' in rel.parts or member.name in names:
+                raise RuntimeError('Unsafe or duplicate backup archive member')
+            names.add(member.name)
+            if member.isdir():
+                continue
+            if not member.isfile():
+                raise RuntimeError('Unsupported backup archive member')
+            stream = archive.extractfile(member)
+            if member.name == 'manifest.json':
+                try:
+                    saved = json.load(stream)
+                except (ValueError, TypeError) as error:
+                    raise RuntimeError('Invalid backup manifest') from error
+                continue
+            checksum = hashlib.sha256(); size = 0
+            while True:
+                block = stream.read(1024 * 1024)
+                if not block:
+                    break
+                checksum.update(block); size += len(block)
+            if size != member.size:
+                raise RuntimeError('Truncated backup archive member')
+            observed[member.name] = {'size':size, 'sha256':checksum.hexdigest()}
+    if not isinstance(saved, dict) or saved.get('files') != observed or not observed:
+        raise RuntimeError('Backup manifest, membership or checksum verification failed')
+    return len(observed)
+
+
 def busy_reason():
     def get(url):
         with urllib.request.urlopen(url, timeout=10) as response:
@@ -138,11 +172,7 @@ def main():
                 with tarfile.open(partial, 'w:gz') as tar:
                     for child in stage.iterdir(): tar.add(child, arcname=child.name)
                 partial.chmod(0o600)
-                with tarfile.open(partial) as tar:
-                    saved = json.load(tar.extractfile('manifest.json'))
-                    for name, info in saved['files'].items():
-                        if hashlib.sha256(tar.extractfile(name).read()).hexdigest() != info['sha256']:
-                            raise RuntimeError('Backup verification failed: ' + name)
+                verify_archive(partial)
                 partial.replace(backup)
             finally:
                 if db_running: docker('start', DB)
