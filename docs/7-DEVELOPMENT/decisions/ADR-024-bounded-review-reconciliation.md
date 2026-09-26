@@ -145,3 +145,14 @@ invented external source. Ellipsis-only HTTP(S) examples are now excluded from
 citation extraction; any actual host, including a URL with an ellipsis in its
 path, remains subject to the same source admission checks. Original response
 text and saved request receipts remain unchanged.
+
+### Explicit finding identity field compatibility
+
+One complete parent response returned all 77 expected finding records using
+`finding_id` instead of `id`. The annotation adapter now accepts those two
+explicit field names through the same exact identity and coverage validator.
+Conflicting fields, invalid values, duplicates, missing identities and guessed
+aliases still fail. Original records are unchanged; the retained annotation
+appendix records which field supplied each identity. Annotation statuses and
+`reviewed_by` text remain model opinions and cannot become source verification.
+Existing responses using `id` retain their previous rendering byte-for-byte.

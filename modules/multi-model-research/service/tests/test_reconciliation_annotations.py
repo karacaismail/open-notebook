@@ -96,3 +96,48 @@ async def test_resumption_reuses_rich_response_without_new_provider_calls():
 def test_rich_annotations_do_not_weaken_the_default_merge_parser():
     from review_contract import parse_merge
     with pytest.raises(PreparationError): parse_merge(json.dumps(response()), ['P1','P2'], ['P1:F1','P2:F1'])
+
+
+def test_explicit_finding_id_field_keeps_raw_records_and_exact_identity_gate():
+    from review_reconciliation import parse_reconciliation
+    value=response()
+    for record in value['reviewed_findings']:
+        record['finding_id']=record.pop('id')
+        record['reviewed_by']='child report, not source verification'
+    raw=json.dumps(value); original=copy.deepcopy(value)
+    report=parse_reconciliation(raw,['P1','P2'],['P1:F1','P2:F1'],payload(2))
+    block=json.loads(report.split('```json\n',1)[1].rsplit('\n```',1)[0])
+    assert value==original and block['records']==original['reviewed_findings']
+    assert block['identity_aliases']==[{'index':0,'field':'finding_id','id':'P1:F1'},
+                                       {'index':1,'field':'finding_id','id':'P2:F1'}]
+    assert block['response_sha256']==digest(raw)
+    assert block['input_statuses']=={'P1:F1':'unverified','P2:F1':'unverified'}
+    assert not block['accepted_as_source_verification']
+
+
+@pytest.mark.parametrize('fault',['conflict','null_id','number','missing','duplicate','unknown','guessed_key'])
+def test_finding_id_alias_does_not_guess_or_override_conflicting_identity(fault):
+    from review_reconciliation import parse_reconciliation
+    value=response()
+    for record in value['reviewed_findings']:record['finding_id']=record.pop('id')
+    first=value['reviewed_findings'][0]
+    if fault=='conflict':first['id']='P2:F1'
+    elif fault=='null_id':first['id']=None
+    elif fault=='number':first['finding_id']=1
+    elif fault=='missing':first.pop('finding_id')
+    elif fault=='duplicate':first['finding_id']='P2:F1'
+    elif fault=='unknown':first['finding_id']='P99:F1'
+    else:first['identity']=first.pop('finding_id')
+    with pytest.raises(PreparationError):
+        parse_reconciliation(json.dumps(value),['P1','P2'],['P1:F1','P2:F1'],payload(2))
+
+
+def test_finding_id_alias_never_turns_a_model_receipt_claim_into_verification():
+    from review_reconciliation import parse_reconciliation
+    value=response();record=value['reviewed_findings'][0]
+    record['finding_id']=record.pop('id')
+    record['receipt_checks']={'passage_matched_not_fact_checked':['made-up']}
+    report=parse_reconciliation(json.dumps(value),['P1','P2'],['P1:F1','P2:F1'],payload(2))
+    block=json.loads(report.split('```json\n',1)[1].rsplit('\n```',1)[0])
+    assert block['unresolved_receipt_references'][0]['finding_id']=='P1:F1'
+    assert block['unresolved_receipt_references'][0]['recorded'] is None

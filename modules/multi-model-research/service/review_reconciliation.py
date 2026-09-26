@@ -172,23 +172,31 @@ def parse_reconciliation(response, coverage, ids, data):
         return parse_merge(response, coverage, ids)
     # The exact same identity/coverage gate still applies. No missing identity
     # is inferred from prose, reconstructed, or filled from the input.
-    projected = dict(value, reviewed_findings=[r.get('id') for r in records])
+    identities=[]; aliases=[]
+    for index,record in enumerate(records):
+        if 'id' in record and 'finding_id' in record and record['id']!=record['finding_id']:
+            raise PreparationError('Reconciliation supplied conflicting explicit finding identities.')
+        ident=record.get('id') if 'id' in record else record.get('finding_id')
+        identities.append(ident)
+        if 'id' not in record and 'finding_id' in record:
+            aliases.append({'index':index,'field':'finding_id','id':ident})
+    projected = dict(value, reviewed_findings=identities)
     report = parse_merge(encoded(projected), coverage, ids)
     unresolved = []
     receipts = data['source_receipts']
-    for record in records:
+    for record,ident in zip(records,identities):
         checks = record.get('receipt_checks', {})
         if not isinstance(checks, dict):
-            unresolved.append({'finding_id': record['id'], 'reason': 'Malformed model receipt annotations.'})
+            unresolved.append({'finding_id': ident, 'reason': 'Malformed model receipt annotations.'})
             continue
         for claimed, references in checks.items():
             if not isinstance(references, list) or not all(isinstance(r, str) for r in references):
-                unresolved.append({'finding_id': record['id'], 'reason': 'Malformed model receipt references.'})
+                unresolved.append({'finding_id': ident, 'reason': 'Malformed model receipt references.'})
                 continue
             for reference in references:
                 actual = receipts.get(reference, {}).get('verification')
                 if actual != claimed:
-                    unresolved.append({'finding_id': record['id'], 'receipt_id': reference,
+                    unresolved.append({'finding_id': ident, 'receipt_id': reference,
                                        'claimed': claimed, 'recorded': actual})
     notes = {'kind': 'model-reconciliation-annotations-v1', 'response_sha256': digest(response),
         'accepted_as_source_verification': False, 'records': records,
@@ -196,6 +204,7 @@ def parse_reconciliation(response, coverage, ids, data):
                            for f in n['findings'] if f['id'] in set(ids)},
         'unresolved_receipt_references': unresolved,
         'additional_fields': {k: v for k, v in value.items() if k not in ('coverage', 'reviewed_findings', 'report')}}
+    if aliases:notes['identity_aliases']=aliases
     return (report + '\n\n## Preserved reconciliation annotations / Korunan bütünleştirme notları\n\n'
         'These are model opinions, not accepted source receipts or changes to the original evidence. '
         'They cannot promote an unverified finding. Input statuses remain authoritative for verification. '
