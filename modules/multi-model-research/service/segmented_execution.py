@@ -79,6 +79,20 @@ def summary(plan):
     return result
 
 
+def saved_plan(engine,run,stage,prompt):
+    """Validate the frozen plan on resume, without expensive repartitioning."""
+    path=engine.input_path(run,stage).parent/'segmented-journal.json'
+    if not path.exists():return None
+    state=json.loads(path.read_text())
+    if state['input_sha256']!=digest(prompt):
+        raise PreparationError('Saved synthesis input changed.')
+    plan=state['plan'];body,_=evidence_body(expand_prompt(prompt))
+    validate_plan(plan,body);registry.validate_plan(plan)
+    if summary(plan)['plan_sha256']!=(stage.get('preparation') or {}).get('plan_sha256'):
+        raise PreparationError('Saved synthesis plan changed.')
+    return plan
+
+
 async def execute(engine, run, stage, prompt):
     # Imported lazily to avoid coupling the planner to the application engine.
     from engine import ServiceError
@@ -108,11 +122,19 @@ async def execute(engine, run, stage, prompt):
     usages=[]
     from workflow import citations
     allowed_urls=set(citations(body))
-    def validated_report(response,ids,claim_ids=()):
+    from synthesis_boundaries import boundary_references, render_references
+    boundaries=boundary_references(plan,body,allowed_urls)
+    async def validated_report(response,ids,claim_ids=(),key=None):
         report=parse_result(response,ids)
         registry.validate_response(response,claim_ids)
-        if set(citations(report))-allowed_urls:
-            raise PreparationError('Intermediate output introduced a source URL absent from its evidence.')
+        report,rendering=render_references(report,boundaries,allowed_urls)
+        if rendering is not None:
+            rendering['raw_response_sha256']=digest(response)
+            saved=state.setdefault('boundary_renderings',{})
+            if key in saved and saved[key]!=rendering:
+                raise PreparationError('The saved source boundary rendering changed.')
+            saved[key]=rendering
+            await persist()
         return report
 
     def request_text(data,ids,final=False,claim_ids=()):
@@ -189,9 +211,9 @@ async def execute(engine, run, stage, prompt):
         if job.get('artifact_response') is not None:
             response,usage=retained_artifact(job)
             usages[-1]=usage
-            return validated_report(response,ids,claim_ids)
+            return await validated_report(response,ids,claim_ids,key)
         try:
-            return validated_report(response,ids,claim_ids)
+            return await validated_report(response,ids,claim_ids,key)
         except PreparationError as exc:
             if stage.get('provider')!='Claude' or not isinstance(exc.__cause__,json.JSONDecodeError):
                 raise
@@ -211,10 +233,10 @@ async def execute(engine, run, stage, prompt):
                 child=dict(stage,request_id=job['request_id'])
                 recovered,usage=await engine.provider.recover(child,request)
                 if usage.get('artifact_recovery'):
-                    validated_report(recovered,ids,claim_ids)
+                    report=await validated_report(recovered,ids,claim_ids,key)
                     retain_recovered_artifact(job,recovered,usage)
                     await persist();usages[-1]=usage
-                    return validated_report(recovered,ids,claim_ids)
+                    return report
                 if digest(recovered)!=job['response_sha256']:
                     raise PreparationError('The completed artifact receipt changed without recovery provenance.')
             records[key]=record
@@ -226,7 +248,7 @@ async def execute(engine, run, stage, prompt):
         record['replacement_response_sha256']=replacement_sha
         await persist()
         # No recursive recovery or regeneration: an invalid replacement stops.
-        return validated_report(replacement,ids,claim_ids)
+        return await validated_report(replacement,ids,claim_ids,retry_key)
 
     try:
         nodes=[]
@@ -255,6 +277,8 @@ async def execute(engine, run, stage, prompt):
                     await engine.store.save(latest)
                 usage={'segmented':True,'calls':len(usages),'measurements':usages,
                        'coverage':ids,'source_sha256':plan['source_sha256']}
+                if state.get('boundary_renderings'):
+                    usage['boundary_renderings']=state['boundary_renderings']
                 if state.get('artifact_regenerations'):
                     usage['artifact_regenerations']=list(state['artifact_regenerations'].values())
                     result+='\n\n## Provider artifact note / Sağlayıcı çıktı notu\n\nOne or more intermediate artifacts were regenerated once from their exact frozen inputs after invalid provider JSON. This is not reconstruction of lost output or a claim of semantic equivalence. Original and replacement responses remain saved and the same coverage and source checks apply. Geçersiz ara çıktılar aynı özgün girdiden bir kez yeniden üretildi; eski ve yeni yanıtlar korundu.\n'

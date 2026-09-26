@@ -446,7 +446,8 @@ class Engine(StageControls):
                 and self.evidence_id(prompt)['format']=='markdown'):
             return stage.get('preparation') if stage['attempts'] else None
         try:
-            plan=segmented_execution.plan_for(self,run,stage,prompt)
+            plan=segmented_execution.saved_plan(self,run,stage,prompt) if stage['attempts'] else None
+            if plan is None:plan=segmented_execution.plan_for(self,run,stage,prompt)
         except (PreparationError,ValueError) as exc:
             policy['findings'].append({'id':'ECA-020','action':'block_submission','severity':'error',
                 'message':str(exc),'evidence':{'preparation_failed':True}})
@@ -456,7 +457,9 @@ class Engine(StageControls):
         policy['findings'].append({'id':'ECA-019','action':'prepare_segments','severity':'warning',
             'message':'The complete evidence will be processed in verified parts. Intermediate findings are not lossless copies of the sources.',
             'evidence':segmented_execution.summary(plan)})
-        return segmented_execution.summary(plan)
+        previous=stage.get('preparation') or {}
+        return dict(segmented_execution.summary(plan),**{k:v for k,v in previous.items()
+                    if k in ('status','current','completed_calls')}) if stage['attempts'] else segmented_execution.summary(plan)
 
     def frozen_prompt(self,run,stage):
         path=self.input_path(run,stage)

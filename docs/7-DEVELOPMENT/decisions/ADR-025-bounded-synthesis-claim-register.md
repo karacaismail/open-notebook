@@ -82,3 +82,27 @@ coverage, invented-source, duplicate-key, non-finite-number, receipt-integrity,
 pause and budget failures cannot use this exception. JSON parsing now rejects
 ambiguous duplicate keys and non-finite numbers. A syntactically valid artifact
 does not establish semantic completeness or equivalence to the missing output.
+
+## Frozen boundaries and resume cost
+
+Existing partitions can end inside a source URL in a long serialized report.
+A model accurately quoting that literal prefix is not inventing a new source.
+Identify this case only when the exact prefix ends at a verified frozen part
+boundary and the complete literal address exists at that same position in the
+byte-verified original. Similar addresses and unrelated prefixes still fail.
+
+Preserve the raw model response. In derived working prose replace only complete
+occurrences of that prefix with a collision-free marker, and append a programmatic
+notice identifying it as **not a source**. Display the prefix with an inert scheme;
+show its complete original address as a provenance mapping, not as verification
+of a claim. Never replace prefixes inside valid complete URLs. Reverse all markers
+and require exact reconstruction before using this representation. Store the
+boundary offsets, original part/source hashes, occurrence counts, response/report
+hashes and notice in a separate journal record. The normal source allowlist is
+unchanged; any remaining new address blocks. No original packet is repartitioned.
+
+On resume, verify the saved plan's input hash, full ordered byte reconstruction,
+claim-register integrity and pinned plan hash instead of recomputing every binary
+partition search. Preserve its progress fields. Every actual subrequest still
+passes the current measured input budget and runtime calibration checks. Other
+policy blocks are never cleared by plan reuse.
