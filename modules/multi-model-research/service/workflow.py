@@ -86,7 +86,19 @@ def ready(run, stage):
 
 def citations(text):
     urls=[]
-    for url in re.findall(r'https?://[^\s<>\[\]"`\x00-\x20]+',text):
+    for match in re.finditer(r'https?://[^\s<>\[\]"`\x00-\x20]+',text):
+        url=match.group()
+        if text[max(0,match.start()-2):match.start()]=='](':
+            # The first unmatched closing parenthesis ends a Markdown link.
+            # Sentence punctuation following it is not part of the URL, while
+            # balanced parentheses inside the destination remain unchanged.
+            depth=0
+            for index,char in enumerate(url):
+                if char=='(':depth+=1
+                elif char==')':
+                    if depth==0:
+                        url=url[:index];break
+                    depth-=1
         url=url.rstrip('.,;:!?}\\')
         while url.endswith(')') and url.count(')') > url.count('('):
             url=url[:-1]
