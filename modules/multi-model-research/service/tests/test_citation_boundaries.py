@@ -23,3 +23,13 @@ def test_query_fragment_unicode_and_bare_internal_parenthesis_are_not_rewritten(
 def test_boundary_fix_does_not_turn_a_different_source_into_an_allowed_url():
     assert citations('[Bad](https://example.org/other)–[Source](https://example.org/source)')==[
         'https://example.org/other','https://example.org/source']
+
+
+@pytest.mark.parametrize('placeholder', ['https://…','https://…”','https://...','http://...'])
+def test_ellipsis_only_example_is_not_a_source_address(placeholder):
+    assert citations('The field contains a placeholder: '+placeholder+' .') == []
+
+
+def test_real_host_with_ellipsis_path_is_not_silently_removed():
+    assert citations('https://example.org/… https://invented.org/source') == [
+        'https://example.org/…','https://invented.org/source']

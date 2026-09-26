@@ -88,6 +88,9 @@ def citations(text):
     urls=[]
     for match in re.finditer(r'https?://[^\s<>\[\]"`\x00-\x20]+',text):
         url=match.group()
+        # An ellipsis-only example has no source host. Keep real hosts (even
+        # those with an ellipsis in their path) subject to normal source checks.
+        if re.fullmatch(r'https?://(?:…|\.{3,})[”’)\],;.!?]*',url):continue
         if text[max(0,match.start()-2):match.start()]=='](':
             # The first unmatched closing parenthesis ends a Markdown link.
             # Sentence punctuation following it is not part of the URL, while

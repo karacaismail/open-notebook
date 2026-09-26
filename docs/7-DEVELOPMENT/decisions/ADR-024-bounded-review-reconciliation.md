@@ -136,3 +136,12 @@ registers, and invented citations. Tests cover within-part batching, indivisible
 records, bounded depth/convergence, preserved intermediate outputs and idempotent
 recovery after interruption. Live planning is validated offline against the saved
 research results before deployment; no test calls the model provider.
+
+### Ellipsis-only citation examples
+
+A completed reconciliation discussed a malformed citation using the literal
+`https://…` example. The URL extractor treated that hostless placeholder as an
+invented external source. Ellipsis-only HTTP(S) examples are now excluded from
+citation extraction; any actual host, including a URL with an ellipsis in its
+path, remains subject to the same source admission checks. Original response
+text and saved request receipts remain unchanged.
