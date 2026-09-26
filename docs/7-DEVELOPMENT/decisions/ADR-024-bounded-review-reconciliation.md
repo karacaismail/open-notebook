@@ -89,6 +89,27 @@ restored full URLs and receipt identities. This restores an existing citation;
 it does not verify the source or promote a finding's status. Completed requests
 are replayed locally without replacement model calls.
 
+## Reversible table transport for metadata-bound parents
+
+A root can fail to converge even after child narratives shrink: its complete
+prior register and per-finding relationship index still repeat field names in
+hundreds of objects. Before reporting that capacity failure, a parent may use
+`lossless-json-tables-v1`. Lists of equally shaped records become explicit column
+names and ordered rows; other values are unchanged. Reserved marker keys in
+source objects are escaped. The program reconstructs the entire original JSON
+and compares its canonical serialization byte for byte before measuring or
+submitting any request. No record, repeated value, condition or narrative is
+removed. Prompts explain the table representation and its untrusted-data scope.
+
+Use the existing input limits and ten percent headroom. If columnar transport
+also fails to fit or converge, stop normally. Keep all existing research,
+reconciliation requests, results and plans immutable. Pin each fallback level's
+protocol, encoded request hashes and decoded payload hashes separately under
+`reconciliation_encodings`; use distinct `reconcile-tree-table-L-N` request keys.
+Resumption must reproduce that encoding plan exactly. The final retained
+appendix includes its manifest. This saves serialization overhead, not model
+reasoning: byte reconstruction does not guarantee semantic interpretation.
+
 ## Validation
 
 Regression tests reject omitted or duplicate findings, altered source receipts,

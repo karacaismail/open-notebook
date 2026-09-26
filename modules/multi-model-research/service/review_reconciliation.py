@@ -6,6 +6,7 @@ import json
 from context_preparation import PreparationError, digest, envelope
 from review_contract import parse_merge, read_object
 from reconciliation_links import restore_receipted_fields
+from reconciliation_tables import transport, INSTRUCTIONS as TABLE_INSTRUCTIONS, VERSION as TABLE_VERSION
 from workflow import citations
 
 VERSION = 'review-reconciliation-tree-v1'
@@ -242,18 +243,41 @@ async def reconcile(runner, data, instructions):
     for level in range(1, MAX_LEVELS + 1):
         make = lambda selected: tree_payload(data, selected)
         request_for = lambda value: TREE_INSTRUCTIONS + envelope(encoded(value))
-        parents = await asyncio.to_thread(partition_items, children, make,
-                                         lambda value: admitted(request_for(value)))
+        saved_encoding = runner.state.get('reconciliation_encodings', {}).get(str(level))
+        parents = None
+        if saved_encoding is None:
+            try:
+                parents = await asyncio.to_thread(partition_items, children, make,
+                                                 lambda value: admitted(request_for(value)))
+            except ReconciliationCapacityError:
+                pass  # Try exact reversible transport before reporting capacity.
+        use_tables = parents is None or (len(children) > 1 and len(parents) >= len(children))
+        if use_tables:
+            request_for = lambda value: TABLE_INSTRUCTIONS + TREE_INSTRUCTIONS + envelope(encoded(transport(value)))
+            parents = await asyncio.to_thread(partition_items, children, make,
+                                             lambda value: admitted(request_for(value)))
         if len(children) > 1 and len(parents) >= len(children):
             raise ReconciliationCapacityError('Reconciliation reports cannot converge within the measured budget; all evidence remains saved.')
+        if use_tables:
+            encoding = {'version': TABLE_VERSION, 'protocol_sha256': digest(TABLE_INSTRUCTIONS + TREE_INSTRUCTIONS),
+                'requests': [{'input_sha256': digest(request_for(parent)),
+                              'decoded_sha256': digest(encoded(parent))} for parent in parents]}
+            if saved_encoding is not None and saved_encoding != encoding:
+                raise PreparationError('The saved reconciliation encoding plan changed.')
+            runner.state.setdefault('reconciliation_encodings', {})[str(level)] = encoding
+            await runner.persist()
         next_children = []
         for index, parent in enumerate(parents, 1):
-            next_children.append(await invoke('reconcile-tree-' + str(level) + '-' + str(index),
+            prefix = 'reconcile-tree-table-' if use_tables else 'reconcile-tree-'
+            next_children.append(await invoke(prefix + str(level) + '-' + str(index),
                 request_for(parent), parent['coverage'], parent['finding_ids']))
         children = next_children
         if len(children) == 1:
             if set(children[0]['finding_ids']) != set(finding_ids(data)) or set(children[0]['coverage']) != set(data['coverage']):
                 raise PreparationError('Final reconciliation lineage is incomplete.')
+            retained = {'version': VERSION, 'manifest': manifest, 'reports': history}
+            if runner.state.get('reconciliation_encodings'):
+                retained['transport_encodings'] = runner.state['reconciliation_encodings']
             return (children[0]['report'] + NOTICE + '\n\n## Preserved intermediate reconciliations\n\n```json\n'
-                    + encoded({'version': VERSION, 'manifest': manifest, 'reports': history}) + '\n```\n')
+                    + encoded(retained) + '\n```\n')
     raise ReconciliationCapacityError('Reconciliation reached its bounded depth; all intermediate reports remain saved.')
