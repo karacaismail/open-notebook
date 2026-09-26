@@ -99,7 +99,8 @@ def test_derived_artifact_is_bound_to_original_receipt(fault):
 
 
 @pytest.mark.asyncio
-async def test_completed_fragment_is_recovered_once_without_replacing_it(tmp_path):
+@pytest.mark.parametrize('profile',['research_review','review_merge'])
+async def test_completed_fragment_is_recovered_once_without_replacing_it(tmp_path,profile):
     from review_execution import ReviewRunner
     from context_preparation import digest
     response='{"coverage":["P4"],"findings":[]}';tail='"findings":[]}'
@@ -113,10 +114,10 @@ async def test_completed_fragment_is_recovered_once_without_replacing_it(tmp_pat
     job={'status':'completed','response':tail,'response_sha256':digest(tail),'usage':{},
          'input_sha256':digest('Frozen evidence'),'request_id':'a'*32}
     runner.state={'jobs':{'review-P4':job}}
-    assert (await runner.call('review-P4','Frozen evidence','research_review'))[0]==response
+    assert (await runner.call('review-P4','Frozen evidence',profile))[0]==response
     assert job['response']==tail and job['response_sha256']==digest(tail)
-    assert (await runner.call('review-P4','Frozen evidence','research_review'))[0]==response
+    assert (await runner.call('review-P4','Frozen evidence',profile))[0]==response
     assert provider.recover.await_count==1 and provider.synthesize.await_count==0
     job['artifact_response']+='corrupt'
     with pytest.raises(Exception,match='changed'):
-        await runner.call('review-P4','Frozen evidence','research_review')
+        await runner.call('review-P4','Frozen evidence',profile)

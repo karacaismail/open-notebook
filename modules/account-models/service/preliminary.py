@@ -43,11 +43,15 @@ def command(base, spec, profile, old_system):
         args.remove('-'); args.append('-')
     elif provider == 'claude':
         flag('--effort',effort)
+        # Capture every assistant artifact segment even for tool-free merging.
+        # Plain JSON output contains only the final continuation fragment.
+        if web or profile == 'review_merge':
+            flag('--output-format','stream-json')
+            if '--verbose' not in args: args.append('--verbose')
         if web:
             if '--restricted' in args: args.remove('--restricted')
             flag('--tools','WebSearch,WebFetch');flag('--allowedTools','WebSearch,WebFetch')
             flag('--system-prompt',system)
-            flag('--output-format','stream-json');args.append('--verbose')
     else:
         flag('--agent','notebook-preliminary' if web else 'notebook-text')
         flag('--effort',effort);flag('--print-timeout','60m')

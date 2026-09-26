@@ -333,7 +333,7 @@ def run_cli(model, prompt, profile='default', selection=None):
             if data.get('is_error') or data.get('error'):
                 raise ValueError('CLI returned an error')
             text = data.get('result')
-            if provider == 'claude' and profile == 'research_review':
+            if provider == 'claude' and profile in ('research_review', 'review_merge'):
                 from claude_artifact import recover_json_artifact
                 recovered = recover_json_artifact(stdout, text)
                 if recovered: text = recovered['text']

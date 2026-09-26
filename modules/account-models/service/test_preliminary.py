@@ -33,6 +33,8 @@ def test_review_profiles_keep_tools_out_of_reconciliation():
         else:
             assert web[web.index('--tools')+1]=='WebSearch,WebFetch'
             assert merge[merge.index('--tools')+1]==''
+            assert merge[merge.index('--output-format')+1]=='stream-json'
+            assert '--verbose' in merge and '--restricted' in merge
             assert '--strict-mcp-config' in web and '--no-chrome' in web
 
 

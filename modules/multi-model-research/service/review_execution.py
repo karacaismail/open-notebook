@@ -190,7 +190,7 @@ class ReviewRunner:
                 if job.get('artifact_response') is not None:
                     response, usage = retained_artifact(job)
                     self.usages.append(usage); return response, usage
-                if profile == 'research_review' and hasattr(self.engine.provider, 'recover'):
+                if profile in ('research_review', 'review_merge') and hasattr(self.engine.provider, 'recover'):
                     try: read_working_object(job['response'])
                     except PreparationError:
                         # A successful CLI continuation may have been recorded by

@@ -227,10 +227,35 @@ async def reconcile(runner, data, instructions):
 
     async def invoke(key, request, coverage, ids):
         response, _ = await runner.call(key, request, 'review_merge')
+        regeneration = None
+        try:
+            read_object(response)
+        except PreparationError as exc:
+            # Confirmed completed but invalid Claude JSON can lack segments
+            # recorded by older JSON-only CLI transport. Replay/recovery was
+            # already attempted by call(). One new synthesis is explicitly
+            # recorded, never misrepresented as recovery of the lost bytes.
+            if runner.stage.get('provider') != 'Claude' or not isinstance(exc.__cause__, json.JSONDecodeError):
+                raise
+            original = response
+            retry_key = key + '-artifact-retry-1'
+            response, _ = await runner.call(retry_key, request, 'review_merge')
+            read_object(response)  # Never loop on an invalid replacement.
+            regeneration = {'kind': 'invalid-json-regeneration-v1', 'original_job': key,
+                'original_response_sha256': digest(original), 'replacement_job': retry_key,
+                'replacement_response_sha256': digest(response), 'same_input_sha256': digest(request)}
         report = parse_reconciliation(response, coverage, ids, data)
         report, restoration = restore_receipted_fields(report, data, allowed, response, set(citations(request)))
+        if regeneration is not None:
+            report += ('\n\nProvider artifact note / Sağlayıcı çıktı notu: This reconciliation was regenerated '
+                'once from the same complete frozen input after invalid provider JSON. This is not reconstruction '
+                'of lost output. Both original and replacement responses remain saved; normal coverage and '
+                'source checks still apply. Geçersiz çıktı aynı özgün girdiden bir kez yeniden üretildi; '
+                'eski ve yeni yanıtlar korundu.\n')
         node = {'id': key, 'coverage': coverage, 'finding_ids': ids,
                 'report': report, 'report_sha256': digest(report)}
+        if regeneration is not None:
+            node['artifact_regeneration'] = regeneration
         if restoration is not None:
             node['citation_restoration'] = restoration
         history.append(node)

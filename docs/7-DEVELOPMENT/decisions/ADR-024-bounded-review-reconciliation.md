@@ -110,6 +110,24 @@ Resumption must reproduce that encoding plan exactly. The final retained
 appendix includes its manifest. This saves serialization overhead, not model
 reasoning: byte reconstruction does not guarantee semantic interpretation.
 
+## Output continuation and bounded artifact regeneration
+
+Claude reconciliation must use verbose stream JSON, with tools still disabled,
+so the bridge retains assistant artifact segments across output-token boundaries.
+The same strict continuation/session/result checks used by re-research also apply
+to merging. A saved fragment is first recovered through its read-only receipt;
+raw receipts remain immutable.
+
+Older JSON-only captures may contain just the final fragment, with no recoverable
+prefix. A completed Claude reconciliation response that fails JSON syntax parsing
+may then have exactly one separately journaled regeneration from the identical
+complete frozen input. It uses an `-artifact-retry-1` key. The old response is not
+replaced; the derived report and audit explicitly distinguish regeneration from
+reconstruction of missing bytes. No repeated web research is needed. An invalid
+replacement stops, and resumption reuses it rather than generating another.
+Uncertain requests, duplicate JSON keys, missing coverage and invented sources
+do not bypass their existing checks or become automatic regeneration triggers.
+
 ## Validation
 
 Regression tests reject omitted or duplicate findings, altered source receipts,
