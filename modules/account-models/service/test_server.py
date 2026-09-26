@@ -25,13 +25,52 @@ class BridgeTests(unittest.TestCase):
         raw={'input_tokens':30,'cache_read_input_tokens':300,'cache_creation_input_tokens':3000,'output_tokens':20,
              'iterations':[{'type':'message','input_tokens':10,'cache_read_input_tokens':100,'cache_creation_input_tokens':1000},
                            {'type':'message','input_tokens':20,'cache_read_input_tokens':200,'cache_creation_input_tokens':2000}]}
-        proc=Mock(returncode=0);proc.communicate.return_value=(json.dumps({'result':'complete','usage':raw}),'')
+        proc=Mock(returncode=0);proc.communicate.return_value=(json.dumps({'result':'complete','usage':raw,
+            'num_turns':2,'subtype':'success','stop_reason':'end_turn','is_error':False}),'')
         with patch.object(server.subprocess,'Popen',return_value=proc):
             _,usage=server.run_cli('claude-account','input','research_synthesis')
         self.assertEqual(usage['prompt_tokens'],3330)
         self.assertEqual(usage['first_context_tokens'],1110)
         self.assertEqual(usage['max_context_tokens'],2220)
         self.assertEqual(usage['context_observations'],2)
+        self.assertTrue(usage['context_observations_complete'])
+
+    def test_continuation_contexts_come_from_unique_stream_messages(self):
+        from unittest.mock import Mock
+        first={'input_tokens':2,'cache_creation_input_tokens':115854,'cache_read_input_tokens':0}
+        second={'input_tokens':4,'cache_creation_input_tokens':64065,'cache_read_input_tokens':115854}
+        events=[]
+        for ident,raw in [('first',first),('second',second)]:
+            for kind in ('thinking','text'):
+                events.append({'type':'assistant','session_id':'session','parent_tool_use_id':None,
+                               'message':{'id':ident,'usage':raw,'content':[{'type':kind}]}})
+        events.append({'type':'result','session_id':'session','result':'complete','num_turns':2,
+                       'subtype':'success','stop_reason':'end_turn','is_error':False,
+                       'usage':{'input_tokens':6,'cache_creation_input_tokens':179919,
+                                'cache_read_input_tokens':115854,'output_tokens':81261,
+                                'iterations':[dict(second,type='message')]}})
+        proc=Mock(returncode=0);proc.communicate.return_value=('\n'.join(map(json.dumps,events)),'')
+        with patch.object(server.subprocess,'Popen',return_value=proc):
+            text,usage=server.run_cli('claude-account','input','research_synthesis')
+        self.assertEqual(text,'complete')
+        self.assertEqual(usage['prompt_tokens'],295779)
+        self.assertEqual(usage['first_context_tokens'],115856)
+        self.assertEqual(usage['max_context_tokens'],179923)
+        self.assertEqual(usage['context_observations'],2)
+        self.assertEqual(usage['cli_num_turns'],2)
+        self.assertEqual(usage['context_observation_source'],'assistant-messages')
+        self.assertTrue(usage['context_observations_complete'])
+
+    def test_partial_terminal_iterations_cannot_attest_first_context(self):
+        from unittest.mock import Mock
+        data={'result':'complete','num_turns':2,'subtype':'success','stop_reason':'end_turn','is_error':False,
+              'usage':{'input_tokens':3000,'iterations':[{'type':'message','input_tokens':2000}]}}
+        proc=Mock(returncode=0);proc.communicate.return_value=(json.dumps(data),'')
+        with patch.object(server.subprocess,'Popen',return_value=proc):
+            text,usage=server.run_cli('claude-account','input','research_synthesis')
+        self.assertEqual(text,'complete')
+        self.assertFalse(usage['context_observations_complete'])
+        self.assertNotIn('first_context_tokens',usage)
 
     def test_markdown_research_transport_is_verbatim_and_restricted(self):
         body=self.request(local_profile='research_synthesis',local_prompt_format='research-markdown-v1')

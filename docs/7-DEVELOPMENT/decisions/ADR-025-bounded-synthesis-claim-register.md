@@ -106,3 +106,26 @@ claim-register integrity and pinned plan hash instead of recomputing every binar
 partition search. Preserve its progress fields. Every actual subrequest still
 passes the current measured input budget and runtime calibration checks. Other
 policy blocks are never cleared by plan reuse.
+
+## Context telemetry across output continuations
+
+Claude's terminal `usage.iterations` may describe only the last continuation,
+even when aggregate billing spans several turns. Prefer usage metadata from
+distinct root assistant message IDs in the captured stream. Repeated content
+blocks for one message count once; conflicting input counters, mixed sessions,
+missing identities, or messages after termination invalidate completeness.
+Subagent messages are excluded from root context observations.
+
+Expose first and maximum context sizes only when the observed turn count and
+summed input counters agree with a successful terminal record. Legacy terminal
+iterations must pass the same accounting checks. Otherwise explicitly mark
+telemetry incomplete, without rejecting or modifying the report. Billing totals
+remain billing totals. No assistant content or hidden reasoning is used for
+these measurements, and existing captures and receipts remain immutable.
+
+Calibration admits recorded measurements only from completed, explicitly proven
+single-turn contexts, in addition to the existing profile, runtime, attempt and
+tool restrictions. A legacy observation count of one is insufficient proof.
+This correction neither changes input limits nor loosens token margins. It can
+be activated at an idle bridge boundary; healthy research calls must not be
+interrupted just to update telemetry.

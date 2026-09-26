@@ -18,6 +18,7 @@ import uuid
 from cancellation import JOBS, RequestCancelled
 from receipts import ReceiptStore
 from cli_errors import terminal_error
+from claude_usage import context_usage
 from model_policy import ModelPolicy, SelectionError, quota_reset_at
 from preliminary import PROFILES, WEB_SYSTEM, command as preliminary_command, trace as preliminary_trace, capabilities as preliminary_capabilities
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -344,12 +345,7 @@ def run_cli(model, prompt, profile='default', selection=None):
             if provider == 'claude':
                 usage = {'prompt_tokens': raw.get('input_tokens', 0) + raw.get('cache_read_input_tokens', 0) + raw.get('cache_creation_input_tokens', 0),
                          'completion_tokens': raw.get('output_tokens', 0)}
-                # Billing totals may span several internal messages. Expose
-                # context observations separately instead of calling the sum a window size.
-                contexts = [i.get('input_tokens',0)+i.get('cache_read_input_tokens',0)+i.get('cache_creation_input_tokens',0)
-                            for i in raw.get('iterations',[]) if i.get('type')=='message']
-                if contexts:
-                    usage.update(first_context_tokens=contexts[0],max_context_tokens=max(contexts),context_observations=len(contexts))
+                usage.update(context_usage(stdout, data))
     except (ValueError, TypeError, KeyError):
         text = ''
     failure, failure_code = terminal_error(provider, stdout, stderr)

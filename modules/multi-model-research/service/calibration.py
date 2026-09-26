@@ -96,7 +96,15 @@ def observations(runs, packet_tokens):
     for run in runs:
         for stage in run['stages']:
             usage = stage.get('usage') or {}
-            reported = usage.get('first_context_tokens') if usage.get('context_observations')==1 else usage.get('prompt_tokens')
+            # Older CLI receipts could report only the last continuation as one
+            # observation. A count alone is not evidence of a single context.
+            single = (usage.get('context_observations_complete') is True
+                      and type(usage.get('context_observations')) is int
+                      and usage['context_observations'] == 1
+                      and type(usage.get('cli_num_turns')) is int
+                      and usage['cli_num_turns'] == 1
+                      and stage.get('status') == 'completed')
+            reported = usage.get('first_context_tokens') if single else usage.get('prompt_tokens')
             if not reported or stage['mode'] != 'account':
                 continue
             raw = packet_tokens(run['id'], stage['id'])
@@ -109,7 +117,7 @@ def observations(runs, packet_tokens):
                                       tool_calls=len(execution.get('tool_calls') or []),
                                       profile=stage.get('account_profile','research_synthesis'),
                                       runtime_fingerprint=(stage.get('input_budget',{}).get('token_margin',{}).get('calibration_fingerprint')),
-                                      measurement_kind='single_context' if usage.get('context_observations')==1 else 'unknown',
+                                      measurement_kind='single_context' if single else 'unknown',
                                       representation='serialized_input'))
     return result
 
