@@ -69,6 +69,26 @@ unverified finding. Narrative text and every annotation field remain unchanged,
 and the original provider response stays immutable in the request journal. This
 compatibility path requires no replacement model call or frozen prompt change.
 
+## Restoring a documented omitted citation selector
+
+A provider can omit the `fields` query from a supplied Semantic Scholar DOI
+detail URL. The [official API tutorial](https://webflow.semanticscholar.org/product/api/tutorial)
+documents this parameter as response field selection. For this exact HTTPS
+endpoint only, a missing query can be restored from one unique full URL present
+in the actual dispatched input, the allowed evidence and its source receipts. A
+variant seen only by another batch is not a restoration candidate. The DOI, scheme, host and path
+must be identical. Changed queries, fragments, unknown endpoints, identity or
+authentication parameters and multiple possible variants still block. Other
+unprovided URLs still fail the exact citation gate; no generic URL normalization
+or new source admission is introduced.
+
+Only the derived report's URL spans change. Raw provider responses, frozen
+requests, findings and receipts remain immutable. A bilingual rendering notice
+and byte-offset audit preserve response/report hashes, original URL hashes,
+restored full URLs and receipt identities. This restores an existing citation;
+it does not verify the source or promote a finding's status. Completed requests
+are replayed locally without replacement model calls.
+
 ## Validation
 
 Regression tests reject omitted or duplicate findings, altered source receipts,

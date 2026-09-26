@@ -5,6 +5,7 @@ import json
 
 from context_preparation import PreparationError, digest, envelope
 from review_contract import parse_merge, read_object
+from reconciliation_links import restore_receipted_fields
 from workflow import citations
 
 VERSION = 'review-reconciliation-tree-v1'
@@ -226,10 +227,11 @@ async def reconcile(runner, data, instructions):
     async def invoke(key, request, coverage, ids):
         response, _ = await runner.call(key, request, 'review_merge')
         report = parse_reconciliation(response, coverage, ids, data)
-        if set(citations(report)) - allowed:
-            raise PreparationError('Reconciliation invented an unprovided source URL.')
+        report, restoration = restore_receipted_fields(report, data, allowed, response, set(citations(request)))
         node = {'id': key, 'coverage': coverage, 'finding_ids': ids,
                 'report': report, 'report_sha256': digest(report)}
+        if restoration is not None:
+            node['citation_restoration'] = restoration
         history.append(node)
         return node
 
